@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned rather than read from engines.node: that field is a range
+      # (>=24) and would silently follow whatever is newest.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # ci rather than install: it installs exactly what the lockfile says and
+      # fails if the lockfile and package.json disagree.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: npm run test:coverage
+
+      - name: Build
+        run: npm run build
+
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned rather than read from engines.node: that field is a range
+      # (>=24) and would silently follow whatever is newest.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Only what ships. A vulnerability in a test runner does not reach a user
+      # of this package, and mixing the two would make the check noise.
+      - name: Audit dependencies
+        run: npm audit --omit=dev
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Gitleaks needs the history to scan past commits, not just the tree.
+          fetch-depth: 0
+
+      - name: Gitleaks
+        run: |
+          wget -qO- https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar xz
+
+          # The config is passed explicitly rather than left to discovery.
+          # Measured on 2026-07-30 with gitleaks 8.24.3: with no .gitleaks.toml
+          # present, `gitleaks detect` reports a planted token as clean and
+          # exits 0, while logging "using default gitleaks config". The same
+          # file with a config of only `[extend] useDefault = true` reports
+          # "leaks found: 1". A renamed or deleted config must break this job,
+          # not silently disarm it.
+          test -f .gitleaks.toml || { echo "::error::.gitleaks.toml is missing"; exit 1; }
+          grep -q useDefault .gitleaks.toml || { echo "::error::.gitleaks.toml does not extend the default rules"; exit 1; }
+
+          ./gitleaks detect --source . --config .gitleaks.toml --verbose --no-banner
