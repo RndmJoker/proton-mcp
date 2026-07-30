@@ -1,0 +1,25 @@
+title = "proton-mcp gitleaks config"
+
+# A config file REPLACES the built-in rules, it does not add to them. Without
+# the extend block below this file would define zero rules, and every scan
+# would report a clean result no matter what the commit contains.
+#
+# Measured on 2026-07-30 with the same test token in the same file: without the
+# block "no leaks found", with it "leaks found: 1". The allowlist keeps working
+# either way.
+[extend]
+useDefault = true
+
+# The check matters more here than in most projects. A bridge password
+# committed by accident does not just look careless, it hands over an entire
+# mailbox. Only files that cannot hold a real value are excluded.
+#
+# __tests__ is deliberately not excluded. Test fixtures are exactly where a
+# real value from a debugging session ends up by accident, so that is the last
+# directory to stop looking at.
+
+[allowlist]
+paths = [
+  '''\.env\.example''',
+  '''package-lock\.json''',
+]

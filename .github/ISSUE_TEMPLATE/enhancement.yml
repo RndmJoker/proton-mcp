@@ -1,0 +1,26 @@
+name: Enhancement
+description: Improve something that already exists
+title: "[Enhancement] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: feature
+    attributes:
+      label: Affected feature
+      description: Which tool, or which part of the web interface?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change?
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behaviour
+      description: How does it work today, and why does that fall short?
