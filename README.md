@@ -2,7 +2,7 @@
 
 An MCP server for Proton Mail. It talks to a locally running Proton Mail Bridge and makes your mailbox available to AI assistants such as Claude.
 
-**Status: under construction.** Reading works and can be used. Writing, the web interface and the browser-based login do not exist yet. See [Status](#status) for the details.
+**Status: under construction.** Reading works and can be used, and so does signing in through the browser. Writing does not exist yet: nothing can be sent, drafted, moved or relabelled. See [Status](#status) for the details.
 
 ## Why everything runs locally
 
@@ -42,15 +42,18 @@ When a tool is called before anyone has signed in, the server does not ask for t
 
 ### What does not exist yet
 
-Each of these has an open issue. The list here says what the server cannot do today, the issues say what is planned.
+This table says what the server cannot do today. The issue behind each entry says what is planned and how far it has got.
 
-- Sending, replying and forwarding, with the mandatory confirmation
-- Drafts
-- Moving messages, read state, trash
-- Labels
-- Binary attachments, currently refused with a reason
-- Publication on npm, so installation via `npx`
-- A single prompt that sets a client up on its own
+| Missing | Tracked in |
+| :--- | :--- |
+| Sending, replying and forwarding, with the mandatory confirmation | [#4](https://github.com/RndmJoker/proton-mcp/issues/4) |
+| Drafts | [#3](https://github.com/RndmJoker/proton-mcp/issues/3) |
+| Moving messages, read state, trash | [#5](https://github.com/RndmJoker/proton-mcp/issues/5) |
+| Labels | [#6](https://github.com/RndmJoker/proton-mcp/issues/6) |
+| Publication on npm, so installation via `npx` | [#7](https://github.com/RndmJoker/proton-mcp/issues/7) |
+| A single prompt that sets a client up on its own | [#8](https://github.com/RndmJoker/proton-mcp/issues/8) |
+
+**Binary attachments** are missing from that table on purpose. They are not an unfinished feature waiting for its turn: `get_attachment` refuses anything that is not text and says why. Handing one over would mean either base64 in the context window, which is unusable, or writing decrypted content to your disk, which this server does not do. Changing that needs a decision first, not an implementation, so there is nothing to track yet.
 
 ### What will never exist
 
@@ -65,7 +68,7 @@ These limits come from the Bridge itself and cannot be worked around:
 ## Requirements
 
 - **A paid Proton plan.** The Bridge is not included in the free tier.
-- **Proton Mail Bridge**, installed, running and unlocked.
+- **Proton Mail Bridge**, installed, running and unlocked. The official application expects a desktop. On a machine without one, [proton-mail-bridge-docker](https://github.com/RndmJoker/proton-mail-bridge-docker) runs it in a container instead. That is a way to get a bridge, not a way to put one somewhere else: it decrypts your mail wherever it runs, so a bridge on another machine means your mail is decrypted on that machine. The section above still applies, and the container's own readme says the same.
 - **Node.js 24 or newer.**
 - **The Bridge password**, which is not your Proton account password. The Bridge generates one per account. You find it in the Bridge application under the account, or in a terminal via `protonmail-bridge --cli` and then `info`.
 
