@@ -1,0 +1,30 @@
+name: Feature request
+description: Ask for something that does not exist yet
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Some limits come from the Bridge itself and cannot be lifted here:
+        no calendar, no contacts, no message expiration, no server-side
+        threading or sorting, no access to filters or account settings. They
+        are listed in the readme under "What will never exist".
+
+        Others are refused on purpose, not for lack of time. Anything that
+        turns a taken-over session into lasting access will not be built, and
+        neither will a switch that skips the confirmation before sending.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What should the server be able to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      description: What problem would it solve, and how do you work around it today?
