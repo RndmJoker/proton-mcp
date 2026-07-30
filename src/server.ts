@@ -30,6 +30,7 @@ import { WebInterface, type StatusSnapshot } from './web/server.js'
 import { registerListFolders } from './tools/list-folders.js'
 import { registerMessageTools } from './tools/messages.js'
 import { registerInterfaceTool } from './tools/interface.js'
+import { registerLabelTools } from './tools/labels.js'
 import { setSignInHint } from './tools/failures.js'
 import { waitForIdle } from './in-flight.js'
 
@@ -257,6 +258,9 @@ async function main(): Promise<void> {
     const server = new McpServer({ name: NAME, version: VERSION })
     registerListFolders(server, connection)
     registerMessageTools(server, connection)
+    // Read as a function rather than a value: whether the server may write is a
+    // property of the configuration, and the tools should ask at call time.
+    registerLabelTools(server, connection, () => config.readOnly)
     registerInterfaceTool(server, {
       url: () => web.url,
       running: () => web.running,

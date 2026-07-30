@@ -2,7 +2,7 @@
 
 An MCP server for Proton Mail. It talks to a locally running Proton Mail Bridge and makes your mailbox available to AI assistants such as Claude.
 
-**Status: under construction.** Reading works and can be used, and so does signing in through the browser. Writing does not exist yet: nothing can be sent, drafted, moved or relabelled. See [Status](#status) for the details.
+**Status: under construction.** Reading works and can be used, and so does signing in through the browser. Labels can be applied and removed. Nothing else can be written yet: no sending, no drafts, no moving between folders. See [Status](#status) for the details.
 
 ## Why everything runs locally
 
@@ -21,6 +21,8 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `search_messages` | Full text, subject, sender, recipient, date range, read state, star, size |
 | `get_message` | One message as readable text, HTML converted, budgeted |
 | `get_attachment` | One attachment by index, textual types only |
+| `add_label` | Applies an existing label. The message stays in its folder |
+| `remove_label` | Removes a label. Folder, other labels and the message itself are untouched |
 
 Underneath: a held IMAP connection that recovers from a Bridge restart, stable identifiers based on the Message-ID, HTML to text conversion, filtering of the public key Proton attaches to every sent message, and a character budget so a single message cannot exhaust a context window.
 
@@ -49,7 +51,6 @@ This table says what the server cannot do today. The issue behind each entry say
 | Sending, replying and forwarding, with the mandatory confirmation | [#4](https://github.com/RndmJoker/proton-mcp/issues/4) |
 | Drafts | [#3](https://github.com/RndmJoker/proton-mcp/issues/3) |
 | Moving messages, read state, trash | [#5](https://github.com/RndmJoker/proton-mcp/issues/5) |
-| Labels | [#6](https://github.com/RndmJoker/proton-mcp/issues/6) |
 | Publication on npm, so installation via `npx` | [#7](https://github.com/RndmJoker/proton-mcp/issues/7) |
 | A single prompt that sets a client up on its own | [#8](https://github.com/RndmJoker/proton-mcp/issues/8) |
 
@@ -187,6 +188,15 @@ The content of someone else's email is text written by strangers, and it is hand
 - **There will be no permanent deletion**, and no tools for filters, forwarding, account or key settings. A hijacked session must not be able to leave behind lasting access.
 - **HTML is never passed through raw** and external content is never fetched. Tracking pixels stay ineffective.
 - **No message ever touches your disk.** No cache, no index, no copies. Anything this server wrote down would be your mail in plain text, outside the encryption you pay Proton for.
+
+### Writing to your mailbox
+
+Applying and removing labels are the only tools that change anything, and they are bounded on purpose:
+
+- **`PROTON_MCP_READ_ONLY=true` refuses every write**, and the interface reports the mode it is in. Reading keeps working.
+- **Removing a label is an expunge inside the label's own mailbox.** The same command aimed at a folder would delete mail, so the code refuses any path outside `Labels/`, checked again in the line immediately before the expunge. A label name containing a path separator is rejected rather than repaired.
+- **Labels are never created**, only applied. Create them in Proton itself.
+- **The message is untouched.** It keeps its folder, its other labels, and it does not go to trash.
 
 ### What lands on your disk
 
