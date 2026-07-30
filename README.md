@@ -2,7 +2,7 @@
 
 An MCP server for Proton Mail. It talks to a locally running Proton Mail Bridge and makes your mailbox available to AI assistants such as Claude.
 
-**Status: under construction.** Reading works and can be used. Writing, the web interface and the browser-based login do not exist yet. See [Status](#status) for the details.
+**Status: under construction.** Reading works and can be used, and so does signing in through the browser. Writing does not exist yet: nothing can be sent, drafted, moved or relabelled. See [Status](#status) for the details.
 
 ## Why everything runs locally
 
