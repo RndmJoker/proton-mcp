@@ -68,7 +68,7 @@ These limits come from the Bridge itself and cannot be worked around:
 ## Requirements
 
 - **A paid Proton plan.** The Bridge is not included in the free tier.
-- **Proton Mail Bridge**, installed, running and unlocked.
+- **Proton Mail Bridge**, installed, running and unlocked. The official application expects a desktop. On a machine without one, [proton-mail-bridge-docker](https://github.com/RndmJoker/proton-mail-bridge-docker) runs it in a container instead. That is a way to get a bridge, not a way to put one somewhere else: it decrypts your mail wherever it runs, so a bridge on another machine means your mail is decrypted on that machine. The section above still applies, and the container's own readme says the same.
 - **Node.js 24 or newer.**
 - **The Bridge password**, which is not your Proton account password. The Bridge generates one per account. You find it in the Bridge application under the account, or in a terminal via `protonmail-bridge --cli` and then `info`.
 
