@@ -1,0 +1,64 @@
+{
+  "name": "proton-mcp",
+  "version": "0.2.0",
+  "description": "MCP server for Proton Mail over the Proton Mail Bridge, with a local web interface for configuration",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "proton-mcp": "dist/server.js"
+  },
+  "main": "dist/server.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "proton",
+    "protonmail",
+    "proton-bridge",
+    "imap",
+    "email"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RndmJoker/proton-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/RndmJoker/proton-mcp/issues"
+  },
+  "homepage": "https://github.com/RndmJoker/proton-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "html-to-text": "^10.0.0",
+    "imapflow": "^1.6.5",
+    "mailparser": "^3.9.14",
+    "nodemailer": "^9.0.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/html-to-text": "^9.0.4",
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^26.1.2",
+    "@vitest/coverage-v8": "^4.1.10",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "^1.3.0"
+  }
+}
