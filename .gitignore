@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+build/
+*.tsbuildinfo
+
+# Tests
+coverage/
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local storage of the server (may hold decrypted mail content)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editors and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Scratch space
+scratch/
+tmp/
+
+# Pinned bridge certificate, machine-specific
+known-certificate.json
+
+# Local working material, kept out of the public repository
+/.agents
+/.claude
+/AGENTS.md
+/CLAUDE.md
+/scripts/ci/
