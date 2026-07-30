@@ -1,6 +1,6 @@
 {
   "name": "proton-mcp",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "MCP server for Proton Mail over the Proton Mail Bridge, with a local web interface for configuration",
   "type": "module",
   "license": "MIT",

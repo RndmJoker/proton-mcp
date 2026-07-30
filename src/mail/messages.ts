@@ -34,12 +34,27 @@ export interface MessageHeader {
   hasAttachments: boolean
 }
 
+/**
+ * What the ordering step cost.
+ *
+ * Reported rather than hidden, because it is the one part of a listing whose
+ * price grows with the size of the mailbox. A caller that sees 2000 ms here
+ * knows why the answer was slow, and so does anyone deciding whether this needs
+ * a cache.
+ */
+export interface OrderingCost {
+  /** How many message dates had to be read to establish the order. */
+  messages: number
+  elapsedMs: number
+}
+
 export interface ListResult {
   path: string
   /** Total number of messages in the mailbox, independent of paging. */
   total: number
   offset: number
   headers: MessageHeader[]
+  ordering: OrderingCost
 }
 
 export function toAddresses(list: Array<{ name?: string; address?: string }> | undefined): Address[] {
@@ -82,8 +97,76 @@ export function detectAttachments(node: unknown): boolean {
   return false
 }
 
+/** A message reduced to what it takes to put it in order. */
+export interface OrderEntry {
+  uid: number
+  date: Date | undefined
+}
+
 /**
- * Reads the headers for a set of UIDs, newest first.
+ * Reads nothing but the date of each message.
+ *
+ * This is the cheapest fetch IMAP offers for the purpose: ENVELOPE and nothing
+ * else. In particular no BODYSTRUCTURE, which is the expensive part of a full
+ * header fetch because the server has to walk the MIME tree to produce it.
+ *
+ * It runs over the entire result set, not over one page, and that is the point:
+ * an order can only be established from all of it. What it costs is reported
+ * back to the caller rather than swallowed.
+ *
+ * The date is taken from the envelope, which is the `Date:` field the sender
+ * wrote. INTERNALDATE would be cheaper still, but it is the time the server
+ * received the message and a copy between mailboxes may set it afresh, which is
+ * the very thing this ordering exists to survive.
+ */
+export async function fetchDates(client: ImapFlow, uids: number[]): Promise<OrderEntry[]> {
+  if (uids.length === 0) return []
+
+  const entries: OrderEntry[] = []
+  for await (const msg of client.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
+    entries.push({ uid: msg.uid, date: msg.envelope?.date })
+  }
+  return entries
+}
+
+/**
+ * Puts messages newest first and returns their UIDs in that order.
+ *
+ * The UID breaks ties, and that is not cosmetic. Two messages can carry the
+ * same `Date:` down to the second, and mail sent by a script routinely does.
+ * Without a tiebreaker their relative order would be whatever the sort happened
+ * to produce that time, which differs between calls, and paging would then be
+ * free to show one of them on two pages and the other on none.
+ *
+ * Messages without a date sort last. They are rare and malformed, but they must
+ * land somewhere definite rather than wherever undefined comparisons put them.
+ */
+export function orderNewestFirst(entries: OrderEntry[]): number[] {
+  // An unparsable Date header yields an Invalid Date rather than nothing, and
+  // its getTime() is NaN. NaN compares false against everything including
+  // itself, so left alone it would scatter such messages wherever the sort
+  // happened to walk. Treated as missing, they land at the end like the rest.
+  const time = (d: Date | undefined): number | undefined => {
+    const t = d?.getTime()
+    return t === undefined || Number.isNaN(t) ? undefined : t
+  }
+
+  return [...entries]
+    .sort((a, b) => {
+      const at = time(a.date)
+      const bt = time(b.date)
+      if (at !== bt) {
+        if (at === undefined) return 1
+        if (bt === undefined) return -1
+        return bt - at
+      }
+      return b.uid - a.uid
+    })
+    .map((e) => e.uid)
+}
+
+/**
+ * Reads the headers for a set of UIDs, keeping the order they were given in.
  *
  * Shared by listing and searching, so both produce identical entries. The
  * caller has already selected the mailbox and narrowed the UIDs down to one
@@ -93,14 +176,14 @@ export function detectAttachments(node: unknown): boolean {
 export async function fetchHeaders(client: ImapFlow, uids: number[]): Promise<MessageHeader[]> {
   if (uids.length === 0) return []
 
-  const headers: MessageHeader[] = []
+  const byUid = new Map<number, MessageHeader>()
   for await (const msg of client.fetch(
     uids,
     { uid: true, envelope: true, flags: true, size: true, bodyStructure: true },
     { uid: true },
   )) {
     const env = msg.envelope
-    headers.push({
+    byUid.set(msg.uid, {
       messageId: env?.messageId ?? '',
       subject: env?.subject ?? '',
       from: toAddresses(env?.from),
@@ -115,9 +198,12 @@ export async function fetchHeaders(client: ImapFlow, uids: number[]): Promise<Me
     })
   }
 
-  // fetch does not guarantee the requested order, so sort by date here.
-  headers.sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0))
-  return headers
+  // fetch does not guarantee the requested order, and the order it was given in
+  // is the one the caller established. Sorting by date here instead would throw
+  // that away, along with the tiebreaker that makes paging deterministic.
+  // A uid that produced no answer is skipped: the message was removed between
+  // the search and this fetch.
+  return uids.map((uid) => byUid.get(uid)).filter((h): h is MessageHeader => h !== undefined)
 }
 
 export interface ListOptions {
@@ -132,9 +218,18 @@ export interface ListOptions {
 /**
  * Lists the headers of a mailbox, newest first.
  *
- * The Bridge supports neither SORT nor THREAD, so ordering happens here. UIDs
- * ascend with arrival, so the highest UIDs are the newest messages and the
- * order comes for free from the UID list.
+ * The Bridge supports neither SORT nor THREAD, so ordering happens here, and it
+ * has to happen over the whole result set before a page is cut out of it.
+ *
+ * Ordering by UID instead would be free, since UIDs ascend with arrival. It was
+ * how this worked and it was wrong: a message moved into a mailbox arrives now
+ * and therefore gets the highest UID, while its `Date:` stays whatever the
+ * sender wrote. It would land on the first page with newer messages behind it.
+ * Archiving does exactly this, so in an archive the two orders barely agree at
+ * all.
+ *
+ * The price is one extra fetch across every hit, whose cost is handed back in
+ * `ordering` rather than hidden.
  */
 export async function listMessages(
   connection: Connection,
@@ -143,12 +238,13 @@ export async function listMessages(
 ): Promise<ListResult> {
   const limit = Math.min(Math.max(options.limit ?? 25, 1), MAX_LIST_LIMIT)
   const offset = Math.max(options.offset ?? 0, 0)
+  const nothing: OrderingCost = { messages: 0, elapsedMs: 0 }
 
   return connection.withMailbox(path, async (client, status) => {
     // The Bridge answers FETCH on an empty mailbox with `BAD no such message`
     // instead of an empty result, so nothing may be fetched here.
     if (status.messages === 0) {
-      return { path, total: 0, offset, headers: [] }
+      return { path, total: 0, offset, headers: [], ordering: nothing }
     }
 
     const uids = await client.search(
@@ -156,18 +252,23 @@ export async function listMessages(
       { uid: true },
     )
     if (!uids || uids.length === 0) {
-      return { path, total: 0, offset, headers: [] }
+      return { path, total: 0, offset, headers: [], ordering: nothing }
     }
 
-    // Newest first, then cut out the requested page.
-    const ordered = [...uids].sort((a, b) => b - a)
+    const started = process.hrtime.bigint()
+    const ordered = orderNewestFirst(await fetchDates(client, uids))
+    const ordering: OrderingCost = {
+      messages: uids.length,
+      elapsedMs: Math.round(Number(process.hrtime.bigint() - started) / 1e6),
+    }
+
     const page = ordered.slice(offset, offset + limit)
     if (page.length === 0) {
-      return { path, total: ordered.length, offset, headers: [] }
+      return { path, total: ordered.length, offset, headers: [], ordering }
     }
 
     const headers = await fetchHeaders(client, page)
-    return { path, total: ordered.length, offset, headers }
+    return { path, total: ordered.length, offset, headers, ordering }
   })
 }
 

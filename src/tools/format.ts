@@ -12,7 +12,7 @@
  */
 
 import type { Address, ParsedMessage } from '../mime/parse.js'
-import type { MessageHeader, ListResult } from '../mail/messages.js'
+import type { MessageHeader, ListResult, OrderingCost } from '../mail/messages.js'
 import type { SearchResult } from '../mail/search.js'
 
 const BEGIN = '----- BEGIN UNTRUSTED MESSAGE CONTENT -----'
@@ -51,6 +51,20 @@ function formatFlags(h: MessageHeader): string {
 }
 
 /**
+ * Ordering a large mailbox has to read every hit's date, and above a certain
+ * size that is felt. Saying so beats leaving the caller to wonder.
+ *
+ * Below the threshold it stays silent. A line reporting 4 ms in every answer
+ * would be noise, and noise in every answer is how a number stops being read.
+ */
+const ORDERING_NOTE_MS = 250
+
+function formatOrdering(cost: OrderingCost): string | undefined {
+  if (cost.elapsedMs < ORDERING_NOTE_MS) return undefined
+  return `Ordering read the dates of ${cost.messages} messages and took ${cost.elapsedMs} ms.`
+}
+
+/**
  * A listing as text. Headers only, never content.
  *
  * Roughly 40 tokens per message, so a page of 25 costs about 1000 tokens. A
@@ -66,6 +80,8 @@ export function formatList(result: ListResult): string {
   const lines: string[] = []
   const last = result.offset + result.headers.length
   lines.push(`Mailbox "${result.path}", showing ${result.offset + 1} to ${last} of ${result.total}, newest first.`)
+  const cost = formatOrdering(result.ordering)
+  if (cost) lines.push(cost)
   lines.push('')
 
   for (const h of result.headers) {
@@ -177,6 +193,7 @@ export function formatSearch(result: SearchResult): string {
     total: result.total,
     offset: result.offset,
     headers: result.headers,
+    ordering: result.ordering,
   })
 
   // The listing helper writes its own header line, which is replaced here.
