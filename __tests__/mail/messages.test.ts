@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { listMessages, MAX_LIST_LIMIT } from '../../src/mail/messages.js'
 import type { Connection, MailboxStatus } from '../../src/bridge/connection.js'
+import type { MessageHeader } from '../../src/mail/messages.js'
 
 /**
  * Tests run without a Bridge. The seam is the Connection class:
@@ -45,7 +46,7 @@ function fakeConnection(messages: FakeMessage[], overrides: Partial<MailboxStatu
             envelope: {
               messageId: `<${m.uid}@example.com>`,
               subject: m.subject,
-              date: new Date(m.date),
+              date: m.date ? new Date(m.date) : undefined,
               from: [{ name: 'Sender', address: 'sender@example.com' }],
               to: [{ address: 'recipient@example.com' }],
             },
@@ -190,5 +191,90 @@ describe('listMessages', () => {
     for (const h of result.headers) {
       expect(Object.keys(h)).not.toContain('text')
     }
+  })
+})
+
+/**
+ * Ordering across page boundaries.
+ *
+ * The tests above cannot reach this: `many()` hands out ascending UIDs together
+ * with ascending dates, which is the one arrangement where UID order and date
+ * order agree. Every case here deliberately breaks that correlation, because
+ * that is what a mailbox does the moment a message is moved into it.
+ *
+ * Verified by restoring the previous implementation and running these against
+ * it: the first and the third fail, the others pass. That is worth writing down
+ * rather than claiming all of them catch the bug. Nothing was ever lost or
+ * duplicated, and the undated case happens to come out right as long as
+ * everything fits on one page. They guard the behaviour, they do not prove the
+ * fix.
+ */
+describe('listMessages ordering', () => {
+  /** Four messages in arrival order, plus an old one moved in afterwards. */
+  const moved: FakeMessage[] = [
+    { uid: 1, subject: 'A 07-10', date: '2026-07-10T10:00:00Z' },
+    { uid: 2, subject: 'B 07-20', date: '2026-07-20T10:00:00Z' },
+    { uid: 3, subject: 'C 07-25', date: '2026-07-25T10:00:00Z' },
+    { uid: 4, subject: 'D 07-29', date: '2026-07-29T10:00:00Z' },
+    { uid: 5, subject: 'MOVED 01-01', date: '2026-01-01T10:00:00Z' },
+  ]
+
+  /** Reads every page and returns the entries in the order a caller sees them. */
+  async function readAllPages(messages: FakeMessage[], pageSize: number): Promise<MessageHeader[]> {
+    const connection = fakeConnection(messages)
+    const seen: MessageHeader[] = []
+    for (let offset = 0; offset < messages.length; offset += pageSize) {
+      const page = await listMessages(connection, 'INBOX', { limit: pageSize, offset })
+      seen.push(...page.headers)
+    }
+    return seen
+  }
+
+  it('keeps the order across page boundaries when a message was moved in', async () => {
+    const seen = await readAllPages(moved, 2)
+    expect(seen.map((h) => h.subject)).toEqual([
+      'D 07-29',
+      'C 07-25',
+      'B 07-20',
+      'A 07-10',
+      'MOVED 01-01',
+    ])
+  })
+
+  it('loses and duplicates nothing while doing so', async () => {
+    const seen = await readAllPages(moved, 2)
+    const ids = seen.map((h) => h.messageId)
+    expect(ids).toHaveLength(moved.length)
+    expect(new Set(ids).size).toBe(moved.length)
+  })
+
+  it('orders identical dates by uid, so paging cannot repeat or skip one', async () => {
+    // A script sending in a loop produces this, and without a tiebreaker the
+    // order between them would be whatever the sort happened to do that run.
+    const sameSecond: FakeMessage[] = [
+      { uid: 1, subject: 'first', date: '2026-07-29T10:00:00Z' },
+      { uid: 2, subject: 'second', date: '2026-07-29T10:00:00Z' },
+      { uid: 3, subject: 'third', date: '2026-07-29T10:00:00Z' },
+      { uid: 4, subject: 'fourth', date: '2026-07-29T10:00:00Z' },
+    ]
+    const seen = await readAllPages(sameSecond, 2)
+    expect(seen.map((h) => h.subject)).toEqual(['fourth', 'third', 'second', 'first'])
+    expect(new Set(seen.map((h) => h.messageId)).size).toBe(4)
+  })
+
+  it('sorts messages without a date to the end rather than anywhere', async () => {
+    const connection = fakeConnection([
+      { uid: 1, subject: 'dated', date: '2026-07-10T10:00:00Z' },
+      { uid: 2, subject: 'undated', date: '' },
+      { uid: 3, subject: 'newer', date: '2026-07-29T10:00:00Z' },
+    ])
+    const result = await listMessages(connection, 'INBOX')
+    expect(result.headers.map((h) => h.subject)).toEqual(['newer', 'dated', 'undated'])
+  })
+
+  it('reports what the ordering cost, so the price is visible rather than guessed', async () => {
+    const result = await listMessages(fakeConnection(many(30)), 'INBOX', { limit: 10 })
+    expect(result.ordering.messages).toBe(30)
+    expect(result.ordering.elapsedMs).toBeGreaterThanOrEqual(0)
   })
 })

@@ -74,37 +74,40 @@ describe('formatDate and formatSize', () => {
   })
 })
 
+/** Ordering that cost nothing worth mentioning, which is the ordinary case. */
+const free = { messages: 0, elapsedMs: 0 }
+
 describe('formatList', () => {
   it('reports an empty mailbox plainly', () => {
-    const result: ListResult = { path: 'Drafts', total: 0, offset: 0, headers: [] }
+    const result: ListResult = { path: 'Drafts', total: 0, offset: 0, headers: [], ordering: free }
     expect(formatList(result)).toBe('The mailbox "Drafts" holds no messages.')
   })
 
   it('distinguishes an empty page from an empty mailbox', () => {
-    const result: ListResult = { path: 'INBOX', total: 40, offset: 100, headers: [] }
+    const result: ListResult = { path: 'INBOX', total: 40, offset: 100, headers: [], ordering: free }
     expect(formatList(result)).toContain('No messages at offset 100')
     expect(formatList(result)).toContain('holds 40')
   })
 
   it('names the range and the total', () => {
-    const result: ListResult = { path: 'INBOX', total: 40, offset: 0, headers: [header(), header()] }
+    const result: ListResult = { path: 'INBOX', total: 40, offset: 0, headers: [header(), header()], ordering: free }
     expect(formatList(result)).toContain('showing 1 to 2 of 40')
   })
 
   it('points out how to page on', () => {
-    const result: ListResult = { path: 'INBOX', total: 40, offset: 0, headers: [header()] }
+    const result: ListResult = { path: 'INBOX', total: 40, offset: 0, headers: [header()], ordering: free }
     const text = formatList(result)
     expect(text).toContain('39 more messages')
     expect(text).toContain('offset=1')
   })
 
   it('says nothing about paging on the last page', () => {
-    const result: ListResult = { path: 'INBOX', total: 1, offset: 0, headers: [header()] }
+    const result: ListResult = { path: 'INBOX', total: 1, offset: 0, headers: [header()], ordering: free }
     expect(formatList(result)).not.toContain('more messages')
   })
 
   it('marks only what deviates from the ordinary', () => {
-    const plain: ListResult = { path: 'INBOX', total: 1, offset: 0, headers: [header()] }
+    const plain: ListResult = { path: 'INBOX', total: 1, offset: 0, headers: [header()], ordering: free }
     expect(formatList(plain)).not.toContain('[')
 
     const marked: ListResult = {
@@ -112,6 +115,7 @@ describe('formatList', () => {
       total: 1,
       offset: 0,
       headers: [header({ seen: false, flagged: true, hasAttachments: true })],
+      ordering: free,
     }
     const text = formatList(marked)
     expect(text).toContain('unread')
@@ -121,13 +125,37 @@ describe('formatList', () => {
 
   it('never contains a message body', () => {
     // The whole point of a listing: 40 tokens per message instead of 16000.
-    const result: ListResult = { path: 'INBOX', total: 1, offset: 0, headers: [header()] }
+    const result: ListResult = { path: 'INBOX', total: 1, offset: 0, headers: [header()], ordering: free }
     expect(formatList(result)).not.toContain('BEGIN UNTRUSTED')
   })
 
   it('includes the id, because everything else needs it', () => {
-    const result: ListResult = { path: 'INBOX', total: 1, offset: 0, headers: [header()] }
+    const result: ListResult = { path: 'INBOX', total: 1, offset: 0, headers: [header()], ordering: free }
     expect(formatList(result)).toContain('<one@example.com>')
+  })
+
+  it('stays quiet about an ordering cost nobody would notice', () => {
+    const result: ListResult = {
+      path: 'INBOX',
+      total: 1,
+      offset: 0,
+      headers: [header()],
+      ordering: { messages: 40, elapsedMs: 4 },
+    }
+    expect(formatList(result)).not.toContain('Ordering read')
+  })
+
+  it('reports an ordering cost that is felt', () => {
+    const result: ListResult = {
+      path: 'All Mail',
+      total: 26816,
+      offset: 0,
+      headers: [header()],
+      ordering: { messages: 26816, elapsedMs: 2700 },
+    }
+    const text = formatList(result)
+    expect(text).toContain('Ordering read the dates of 26816 messages')
+    expect(text).toContain('2700 ms')
   })
 })
 

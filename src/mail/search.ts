@@ -17,7 +17,14 @@
 import type { SearchObject } from 'imapflow'
 import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
-import { fetchHeaders, MAX_LIST_LIMIT, type MessageHeader } from './messages.js'
+import {
+  fetchDates,
+  fetchHeaders,
+  orderNewestFirst,
+  MAX_LIST_LIMIT,
+  type MessageHeader,
+  type OrderingCost,
+} from './messages.js'
 
 export interface SearchCriteria {
   /** Free text, searched in the body and in headers. The expensive part. */
@@ -48,6 +55,8 @@ export interface SearchResult {
   headers: MessageHeader[]
   /** How long the search itself took, so a caller can judge the cost. */
   elapsedMs: number
+  /** What putting the hits in order cost, separate from the search. */
+  ordering: OrderingCost
   /** True when the search included a full-text term, which is the slow case. */
   fullText: boolean
 }
@@ -119,13 +128,30 @@ export async function searchMessages(
   const elapsedMs = Math.round(Number(process.hrtime.bigint() - started) / 1e6)
 
   if (uids.length === 0) {
-    return { path, total: 0, offset, headers: [], elapsedMs, fullText: isFullText(criteria) }
+    return {
+      path,
+      total: 0,
+      offset,
+      headers: [],
+      elapsedMs,
+      ordering: { messages: 0, elapsedMs: 0 },
+      fullText: isFullText(criteria),
+    }
   }
 
-  // Newest first, then cut out the page. Fetching headers for the whole result
-  // would defeat the purpose: a common word matched 6803 messages in the
-  // measured mailbox.
-  const ordered = [...uids].sort((a, b) => b - a)
+  // Ordering reads the date of every hit, because a page can only be cut out of
+  // a list that is already in order. Only the dates: the full header fetch below
+  // still covers one page, which is what keeps this affordable. A common word
+  // matched 6803 messages in the measured mailbox.
+  const orderStarted = process.hrtime.bigint()
+  const ordered = await connection.withMailbox(path, async (client) =>
+    orderNewestFirst(await fetchDates(client, uids)),
+  )
+  const ordering: OrderingCost = {
+    messages: uids.length,
+    elapsedMs: Math.round(Number(process.hrtime.bigint() - orderStarted) / 1e6),
+  }
+
   const page = ordered.slice(offset, offset + limit)
 
   // Same helper the listing uses, so both produce identical entries.
@@ -137,6 +163,7 @@ export async function searchMessages(
     offset,
     headers,
     elapsedMs,
+    ordering,
     fullText: isFullText(criteria),
   }
 }

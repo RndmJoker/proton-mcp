@@ -26,9 +26,11 @@ export function registerMessageTools(server: McpServer, connection: Connection):
     {
       title: 'List messages',
       description:
-        'Lists the messages of a mailbox, newest first. Returns headers only: sender, subject, date, ' +
-        'size and the message id. It never returns message bodies, because a single message averages ' +
-        'around 16000 tokens raw. Use get_message with an id to read one.',
+        'Lists the messages of a mailbox, newest first by the date the sender wrote, which also holds ' +
+        'across pages. Returns headers only: sender, subject, date, size and the message id. It never ' +
+        'returns message bodies, because a single message averages around 16000 tokens raw. Use ' +
+        'get_message with an id to read one. Ordering reads one date per message in the mailbox, so a ' +
+        'very large mailbox takes a moment; the answer says so when it does.',
       inputSchema: z.object({
         mailbox: z
           .string()
@@ -73,7 +75,7 @@ export function registerMessageTools(server: McpServer, connection: Connection):
       title: 'Search messages',
       description:
         'Searches a mailbox by text, subject, sender, recipient, date range, read state, star or size. ' +
-        'At least one criterion is required. Returns headers only, newest first, with paging. ' +
+        'At least one criterion is required. Returns headers only, newest first across pages, with paging. ' +
         'A full-text search walks the local database of the Bridge and takes a few seconds on a large ' +
         'mailbox, while criteria such as unread or date are fast. Searching "All Mail" covers every ' +
         'mailbox including trash.',

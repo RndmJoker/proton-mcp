@@ -140,6 +140,53 @@ describe('searchMessages', () => {
     expect(result.fullText).toBe(true)
   })
 
+  it('reports the ordering cost apart from the search itself', async () => {
+    // Two different prices: the Bridge walking its database, and this server
+    // reading a date per hit. Lumping them together would hide which one hurts.
+    const uids = Array.from({ length: 40 }, (_, i) => i + 1)
+    const result = await searchMessages(fakeConnection(uids), 'All Mail', { text: 'x', limit: 10 })
+    expect(result.ordering.messages).toBe(40)
+    expect(result.ordering.elapsedMs).toBeGreaterThanOrEqual(0)
+  })
+
+  it('orders hits by date, not by the uid the search returned', async () => {
+    // The search hands back ascending uids. Here uid 5 is the oldest message
+    // and uid 1 the newest, so anything ordering by uid comes out reversed.
+    const dates: Record<number, Date> = {
+      1: new Date('2026-07-29T10:00:00Z'),
+      2: new Date('2026-07-25T10:00:00Z'),
+      3: new Date('2026-07-20T10:00:00Z'),
+      4: new Date('2026-07-10T10:00:00Z'),
+      5: new Date('2026-01-01T10:00:00Z'),
+    }
+    const client = {
+      search: async () => [1, 2, 3, 4, 5],
+      fetch: (wanted: number[]) =>
+        (async function* () {
+          for (const uid of wanted) {
+            yield {
+              uid,
+              size: 1000,
+              flags: new Set(['\\Seen']),
+              envelope: {
+                messageId: `<${uid}@example.com>`,
+                subject: `Message ${uid}`,
+                date: dates[uid],
+              },
+              bodyStructure: { type: 'text/plain' },
+            }
+          }
+        })(),
+    }
+    const connection = {
+      withMailbox: async (_p: string, op: (c: unknown, s: MailboxStatus) => Promise<unknown>) =>
+        op(client, { path: 'All Mail', messages: 5, unseen: 0, uidValidity: '1', uidNext: 6 }),
+    } as unknown as Connection
+
+    const result = await searchMessages(connection, 'All Mail', { text: 'x', limit: 2 })
+    expect(result.headers.map((h) => h.messageId)).toEqual(['<1@example.com>', '<2@example.com>'])
+  })
+
   it('rejects an empty query before touching the mailbox', async () => {
     await expect(searchMessages(fakeConnection([1]), 'All Mail', {})).rejects.toThrow(BridgeError)
   })

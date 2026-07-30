@@ -62,7 +62,7 @@ These limits come from the Bridge itself and cannot be worked around:
 - **No calendar, no contacts.** Neither flows through the Bridge.
 - **No Proton-specific features.** No message expiration, no password-protected messages to outside recipients.
 - **No access to filters, forwarding rules or account settings.** This is also a deliberate security boundary, see below.
-- **No server-side threading or sorting.** The Bridge supports neither `THREAD` nor `SORT`, so ordering happens in this server.
+- **No server-side threading or sorting.** The Bridge supports neither `THREAD` nor `SORT`, so ordering happens in this server, which costs one date read per message before a page can be cut out.
 - **No permanent deletion.** Deleted will mean moved to trash, on purpose.
 
 ## Requirements
