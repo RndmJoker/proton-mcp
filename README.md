@@ -42,15 +42,18 @@ When a tool is called before anyone has signed in, the server does not ask for t
 
 ### What does not exist yet
 
-Each of these has an open issue. The list here says what the server cannot do today, the issues say what is planned.
+This table says what the server cannot do today. The issue behind each entry says what is planned and how far it has got.
 
-- Sending, replying and forwarding, with the mandatory confirmation
-- Drafts
-- Moving messages, read state, trash
-- Labels
-- Binary attachments, currently refused with a reason
-- Publication on npm, so installation via `npx`
-- A single prompt that sets a client up on its own
+| Missing | Tracked in |
+| :--- | :--- |
+| Sending, replying and forwarding, with the mandatory confirmation | [#4](https://github.com/RndmJoker/proton-mcp/issues/4) |
+| Drafts | [#3](https://github.com/RndmJoker/proton-mcp/issues/3) |
+| Moving messages, read state, trash | [#5](https://github.com/RndmJoker/proton-mcp/issues/5) |
+| Labels | [#6](https://github.com/RndmJoker/proton-mcp/issues/6) |
+| Publication on npm, so installation via `npx` | [#7](https://github.com/RndmJoker/proton-mcp/issues/7) |
+| A single prompt that sets a client up on its own | [#8](https://github.com/RndmJoker/proton-mcp/issues/8) |
+
+**Binary attachments** are missing from that table on purpose. They are not an unfinished feature waiting for its turn: `get_attachment` refuses anything that is not text and says why. Handing one over would mean either base64 in the context window, which is unusable, or writing decrypted content to your disk, which this server does not do. Changing that needs a decision first, not an implementation, so there is nothing to track yet.
 
 ### What will never exist
 
