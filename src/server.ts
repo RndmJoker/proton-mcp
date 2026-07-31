@@ -38,6 +38,7 @@ import { registerSendTools } from './tools/send.js'
 import type { PendingSend } from './tools/confirm.js'
 import { setSignInHint } from './tools/failures.js'
 import { setHandshakeCapabilities } from './tools/capabilities.js'
+import { registerGuidance, INSTRUCTIONS } from './tools/guidance.js'
 import { waitForIdle } from './in-flight.js'
 
 // The version number lives in package.json only.
@@ -298,8 +299,13 @@ async function main(): Promise<void> {
         // payload to it. Without this the state would come back as a raw
         // string the client could have written itself.
         requestState: { verify: sendCodec.verify },
+        // Travels with every connection, so it costs context on every session.
+        // It names only what a model would otherwise get wrong before it had a
+        // reason to look anything up; the detail lives in the resources.
+        instructions: INSTRUCTIONS,
       },
     )
+    registerGuidance(server)
     registerListFolders(server, connection)
     registerMessageTools(server, connection)
     // Read as a function rather than a value: whether the server may write is a

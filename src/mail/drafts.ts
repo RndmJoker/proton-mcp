@@ -44,13 +44,17 @@ import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
 import { normaliseMessageId } from './ids.js'
 import { getMessage, listMessages, type ListResult } from './messages.js'
+import { htmlToText } from '../mime/parse.js'
 import {
   buildMessage,
   mintMessageId,
   parseRecipient,
   parseRecipients,
+  escapeHtml,
   prefixSubject,
   quote,
+  quoteAsHtml,
+  quoteBody,
   type Draft,
   type Recipient,
 } from './compose.js'
@@ -94,6 +98,7 @@ export interface DraftInput {
   bcc?: string[] | undefined
   subject?: string | undefined
   text?: string | undefined
+  html?: string | undefined
 }
 
 export interface DraftResult {
@@ -106,6 +111,24 @@ export interface DraftResult {
   uid: number
   /** Set when a whole message was carried along, as with a forward. */
   carriedAttachments?: string[]
+}
+
+/**
+ * A message carries text or markup, never both.
+ *
+ * Refused rather than resolved by a rule nobody would remember. Measured:
+ * Proton keeps the markup and drops the text half of a message that has both,
+ * so whichever one this server chose to prefer, the other would silently never
+ * arrive.
+ */
+function assertOneBody(input: DraftInput): void {
+  if (input.html !== undefined && input.text !== undefined) {
+    throw new BridgeError(
+      'Both a text and a markup body were given. A message carries one or the other: Proton drops ' +
+        'the text half of a message that has both, so the half that was confirmed would never ' +
+        'arrive. Give whichever one this message is.',
+    )
+  }
 }
 
 /** Writes a built message into "Drafts" and returns its new uid. */
@@ -160,6 +183,7 @@ export async function createDraft(
   input: DraftInput,
 ): Promise<DraftResult> {
   assertWritable(readOnly, 'creating a draft')
+  assertOneBody(input)
 
   const from = parseRecipient(fromAddress)
   const draft: Draft = {
@@ -168,8 +192,12 @@ export async function createDraft(
     cc: parseRecipients(input.cc),
     bcc: parseRecipients(input.bcc),
     subject: input.subject ?? '',
-    text: input.text ?? '',
+    // With markup, the text is the readable rendering of it rather than a
+    // second version of the message. Anything that reads `text` then gets
+    // something true, and nothing has to remember which field to look at.
+    text: input.html !== undefined ? htmlToText(input.html) : (input.text ?? ''),
     messageId: mintMessageId(from.address),
+    ...(input.html !== undefined ? { html: input.html } : {}),
   }
 
   const raw = await buildMessage(draft, { keepBcc: true })
@@ -203,6 +231,7 @@ export async function updateDraft(
   changes: DraftInput,
 ): Promise<DraftResult> {
   assertWritable(readOnly, 'changing a draft')
+  assertOneBody(changes)
 
   const id = normaliseMessageId(messageId)
   const existing = await findDraft(connection, id)
@@ -233,7 +262,7 @@ export async function updateDraft(
     // only ever true for a draft this server wrote.
     bcc: changes.bcc === undefined ? current.bcc : parseRecipients(changes.bcc),
     subject: changes.subject === undefined ? current.subject : changes.subject,
-    text: changes.text === undefined ? current.text : changes.text,
+    ...markupOf(changes, current),
     messageId: id,
   }
 
@@ -255,6 +284,45 @@ export async function updateDraft(
     bcc: draft.bcc,
     uid,
   }
+}
+
+/**
+ * Which body a changed draft ends up with.
+ *
+ * Giving markup replaces the whole body, and so does giving text: a draft that
+ * was markup and is changed to text is now text. Naming neither carries over
+ * what was there, markup included, which is what makes changing only the
+ * subject of a formatted draft leave the formatting alone.
+ */
+function markupOf(
+  changes: DraftInput,
+  current: { text: string; html?: string },
+): { text: string; html?: string } {
+  if (changes.html !== undefined) return { text: htmlToText(changes.html), html: changes.html }
+  if (changes.text !== undefined) return { text: changes.text }
+  return current.html !== undefined
+    ? { text: current.text, html: current.html }
+    : { text: current.text }
+}
+
+/**
+ * The body of a reply, with the original quoted below it.
+ *
+ * When the new part is markup, the quote is markup as well, and it is built
+ * from the original's **text** rather than from its markup. The reasoning is in
+ * quoteAsHtml, and it is worth repeating in one line here because it is the
+ * question anyone will ask when they read this: carrying a stranger's markup
+ * into a message sent under this account's name would mean either refusing to
+ * reply to ordinary HTML mail, or forwarding links whose targets nobody wrote.
+ */
+function composeWithQuote(
+  text: string,
+  html: string | undefined,
+  original: { from: Recipient[]; date: Date | undefined; subject: string; text: string; html?: string },
+): { text: string; html?: string; quotedHtml?: string } {
+  if (html === undefined) return { text: `${text}${quote(original)}` }
+  const quoted = quoteAsHtml(original)
+  return { text: htmlToText(html + quoted), html, quotedHtml: quoted }
 }
 
 /** The thread headers of a message, which a reply has to carry on. */
@@ -312,7 +380,7 @@ export async function buildReplyDraft(
   fromAddress: string,
   messageId: string,
   text: string,
-  options: { all?: boolean; mailbox?: string } = {},
+  options: { all?: boolean; mailbox?: string; html?: string } = {},
 ): Promise<Draft> {
   const original = await getMessage(connection, messageId, {
     ...(options.mailbox ? { hint: options.mailbox } : {}),
@@ -339,13 +407,14 @@ export async function buildReplyDraft(
     )
   }
 
+  const body = composeWithQuote(text, options.html, original)
   const draft: Draft = {
     from,
     to,
     cc,
     bcc: [],
     subject: prefixSubject(original.subject, 'Re'),
-    text: `${text}${quote(original)}`,
+    ...body,
     messageId: mintMessageId(from.address),
     ...(thread.messageId ? { inReplyTo: thread.messageId } : {}),
     references: [...thread.references, ...(thread.messageId ? [thread.messageId] : [])],
@@ -361,7 +430,7 @@ export async function replyDraft(
   fromAddress: string,
   messageId: string,
   text: string,
-  options: { all?: boolean; mailbox?: string } = {},
+  options: { all?: boolean; mailbox?: string; html?: string } = {},
 ): Promise<DraftResult> {
   assertWritable(readOnly, 'creating a reply draft')
   const draft = await buildReplyDraft(connection, fromAddress, messageId, text, options)
@@ -395,7 +464,7 @@ export async function buildForwardDraft(
   messageId: string,
   to: string[],
   text: string,
-  options: { mailbox?: string } = {},
+  options: { mailbox?: string; html?: string } = {},
 ): Promise<Draft> {
   const original = await getMessage(connection, messageId, {
     ...(options.mailbox ? { hint: options.mailbox } : {}),
@@ -422,7 +491,24 @@ export async function buildForwardDraft(
     cc: [],
     bcc: [],
     subject: prefixSubject(original.subject, 'Fwd'),
-    text: `${text}\n${header}${original.text}`,
+    ...(options.html === undefined
+      ? { text: `${text}\n${header}${original.text}` }
+      : (() => {
+          const head =
+            `<p>---------- Forwarded message ----------<br>` +
+            `From: ${escapeHtml(original.from.map((f) => (f.name ? `${f.name} <${f.address}>` : f.address)).join(', '))}<br>` +
+            `Date: ${escapeHtml(original.date ? original.date.toISOString().slice(0, 16).replace('T', ' ') : 'unknown')}<br>` +
+            `Subject: ${escapeHtml(original.subject || '(no subject)')}<br>` +
+            `To: ${escapeHtml(original.to.map((t) => t.address).join(', ') || '(none)')}</p>`
+          // The same preparation as a reply: the original as it was, minus what
+          // would reach out of the quote.
+          const quoted = head + quoteBody(original)
+          return {
+            text: htmlToText(options.html + quoted),
+            html: options.html,
+            quotedHtml: quoted,
+          }
+        })()),
     messageId: mintMessageId(from.address),
   }
 
@@ -452,7 +538,7 @@ export async function forwardDraft(
   messageId: string,
   to: string[],
   text: string,
-  options: { mailbox?: string } = {},
+  options: { mailbox?: string; html?: string } = {},
 ): Promise<DraftResult> {
   assertWritable(readOnly, 'creating a forward draft')
   const draft = await buildForwardDraft(connection, fromAddress, messageId, to, text, options)
@@ -521,5 +607,8 @@ export async function readDraftForSending(
     subject: stored.subject,
     text: stored.text,
     messageId: id,
+    // A draft written as markup is sent as the markup it was. Converting it to
+    // text and back would deliver something its author never wrote.
+    ...(stored.html !== undefined ? { html: stored.html } : {}),
   }
 }

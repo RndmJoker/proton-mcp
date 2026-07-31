@@ -51,6 +51,15 @@ export interface ParsedMessage {
   text: string
   /** Where the text came from. "html" means it was converted. */
   textSource: 'plain' | 'html' | 'none'
+  /**
+   * The markup itself, when the message had any.
+   *
+   * Kept alongside the converted text rather than instead of it. A draft that
+   * was written as markup has to be sendable again as the markup it was, and
+   * converting it to text and back would deliver something the author never
+   * wrote.
+   */
+  html?: string
   /** True when the text was shortened to stay within the budget. */
   truncated: boolean
   /** Where to continue reading, or undefined when the end was reached. */
@@ -263,6 +272,7 @@ export async function parseMessage(
     date: parsed.date,
     text: excerpt.text,
     textSource,
+    ...(typeof parsed.html === 'string' && parsed.html ? { html: parsed.html } : {}),
     truncated: excerpt.truncated,
     ...(excerpt.nextOffset !== undefined ? { nextTextOffset: excerpt.nextOffset } : {}),
     totalTextChars: excerpt.totalChars,
