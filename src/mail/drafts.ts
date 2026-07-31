@@ -42,7 +42,7 @@
 import type { ImapFlow } from 'imapflow'
 import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
-import { normaliseMessageId } from './ids.js'
+import { normaliseMessageId, findByMessageId } from './ids.js'
 import { getMessage, listMessages, type ListResult } from './messages.js'
 import { htmlToText } from '../mime/parse.js'
 import {
@@ -153,9 +153,11 @@ async function findDraft(
 ): Promise<{ uid: number; flags: Set<string> } | undefined> {
   return connection.withMailbox(DRAFTS, async (client: ImapFlow, status) => {
     if (status.messages === 0) return undefined
-    const hits = await client.search({ header: { 'message-id': messageId } }, { uid: true })
-    if (!Array.isArray(hits) || hits.length === 0) return undefined
-    const uid = Math.max(...hits)
+    // The same two-attempt lookup as everywhere else. A draft this server wrote
+    // always carries proper brackets, but the identifier handed in comes from a
+    // listing, and a listing is where the other spelling shows up.
+    const uid = await findByMessageId(client, messageId)
+    if (uid === undefined) return undefined
     const message = await client.fetchOne(String(uid), { flags: true }, { uid: true })
     return { uid, flags: message && message.flags ? message.flags : new Set<string>() }
   })
