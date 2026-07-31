@@ -100,6 +100,14 @@ export interface LoginPageData {
   csrf: string
   /** See sections.ts: required so that it cannot be lost by omission. */
   disclaimer: DisclaimerState
+  /** Where the Bridge is expected, prefilled into the advanced block. */
+  bridgeHost: string
+  bridgeImapPort: number
+  bridgeSmtpPort: number
+  /** True when the ports came from the environment and are not ours to change. */
+  portsLocked: boolean
+  /** Opens the advanced block, for when the ports are what went wrong. */
+  showAdvanced?: boolean
   stores: StoreAvailability[]
   suggested: StoreKind
   suggestionReason: string
@@ -137,6 +145,59 @@ function masterPasswordFields(): string {
   <label for="masterRepeat">Repeat the master password</label>
   <input id="masterRepeat" name="masterRepeat" type="password" autocomplete="new-password">
 </div>`
+}
+
+/**
+ * Where the Bridge is reached, folded away.
+ *
+ * Almost nobody needs it: the Bridge listens on 1143 and 1025 unless somebody
+ * changed that in the Bridge itself. But a wrong port looks exactly like a
+ * Bridge that is not running, and finding that out after signing in, in a
+ * different section, is a poor way to spend an evening. So it is here, prefilled
+ * with what the server will actually use, and closed.
+ *
+ * `<details>` rather than a scripted panel: it is the browser's own disclosure
+ * element and needs nothing this page cannot have.
+ *
+ * **The host is shown and not editable, and that is deliberate.** A wrong port
+ * means nothing works, which is obvious immediately. A wrong host means the
+ * Bridge password is handed to another machine at the next connection, which is
+ * obvious to nobody. Making it changeable is tracked in #19, where it will sit
+ * behind a key that never travels through a tool call, so that changing it stays
+ * a deliberate act by the person at the keyboard.
+ */
+function advancedSettings(data: LoginPageData): string {
+  const portFields = data.portsLocked
+    ? `<p class="hint">Both ports come from the environment
+    (<code>BRIDGE_IMAP_PORT</code>, <code>BRIDGE_SMTP_PORT</code>), so they are not changed here.
+    An explicit setting stays explicit.</p>
+    <table>
+      <tr><th>IMAP port</th><td>${escapeHtml(String(data.bridgeImapPort))}</td></tr>
+      <tr><th>SMTP port</th><td>${escapeHtml(String(data.bridgeSmtpPort))}</td></tr>
+    </table>`
+    : `<label for="imapPort">IMAP port</label>
+  <input id="imapPort" name="imapPort" type="text" inputmode="numeric"
+         value="${escapeHtml(String(data.bridgeImapPort))}">
+
+  <label for="smtpPort">SMTP port</label>
+  <input id="smtpPort" name="smtpPort" type="text" inputmode="numeric"
+         value="${escapeHtml(String(data.bridgeSmtpPort))}">
+  <p class="hint">The defaults are what the Bridge uses unless you changed them in the Bridge
+  itself, where you also find the real ones under its settings. They are saved along with the
+  sign-in and can be changed later under Bridge.</p>`
+
+  return `<details class="card advanced"${data.showAdvanced ? ' open' : ''}>
+  <summary>Advanced: where the Bridge is reached</summary>
+
+  <label for="bridgeHostShown">Address of the Bridge</label>
+  <input id="bridgeHostShown" type="text" value="${escapeHtml(data.bridgeHost)}" disabled>
+  <p class="hint">Set with <code>BRIDGE_HOST</code> and not editable here yet. A wrong port means
+  nothing works and you notice at once; a wrong address means your Bridge password goes to another
+  machine and nobody notices at all. Making it changeable in the browser is planned, behind a key
+  that no assistant can reach.</p>
+
+  ${portFields}
+</details>`
 }
 
 /**
@@ -191,6 +252,8 @@ ${masterPasswordFields()}
 <h2>Where should the password be kept?</h2>
 <p class="lead">${escapeHtml(data.suggestionReason)}</p>
 ${options}
+
+${advancedSettings(data)}
 
 <div class="card">
   <button type="submit">Connect</button>

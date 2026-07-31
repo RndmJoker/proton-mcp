@@ -149,7 +149,11 @@ export interface StatusSnapshot {
   certificate?: { fingerprint: string; subject: string; firstSeen: string }
   bridgeHost: string
   bridgeImapPort: number
-  bridgeSmtpPort?: number
+  /**
+   * Required, not optional. It used to fall back to 0, which is not a port:
+   * the advanced block would prefill a value the same form then refused.
+   */
+  bridgeSmtpPort: number
   readOnly?: boolean
   uptimeMs?: number
 }
@@ -424,9 +428,16 @@ export class WebInterface {
   async #render(
     section: Section,
     response: ServerResponse,
-    outcome: { error?: string; notice?: string; address?: string; store?: StoreKind } = {},
+    outcome: {
+      error?: string
+      notice?: string
+      address?: string
+      store?: StoreKind
+      /** Opens the advanced block, so a rejected port is where the eye lands. */
+      showAdvanced?: boolean
+    } = {},
   ): Promise<void> {
-    const { error, notice, address, store } = outcome
+    const { error, notice, address, store, showAdvanced } = outcome
     const status = await this.#options.getStatus()
     const token = this.#secrets.accessToken
     const disclaimer = this.#disclaimerFor(section)
@@ -453,9 +464,14 @@ export class WebInterface {
         stores,
         suggested: recommend(stores),
         suggestionReason: recommendationReason(stores),
+        bridgeHost: status.bridgeHost,
+        bridgeImapPort: status.bridgeImapPort,
+        bridgeSmtpPort: status.bridgeSmtpPort,
+        portsLocked: this.#options.onPorts === undefined,
         ...(store ? { chosen: store } : {}),
         ...(error ? { error } : {}),
         ...(address ? { address } : {}),
+        ...(showAdvanced ? { showAdvanced } : {}),
       })
       this.#send(response, 200, 'text/html; charset=utf-8', page)
       return
@@ -483,7 +499,7 @@ export class WebInterface {
           csrfTest: csrfToken(this.#secrets, '/test-connection'),
           bridgeHost: status.bridgeHost,
           bridgeImapPort: status.bridgeImapPort,
-          bridgeSmtpPort: status.bridgeSmtpPort ?? 0,
+          bridgeSmtpPort: status.bridgeSmtpPort,
           // No handler means the ports are not ours to change.
           portsLocked: this.#options.onPorts === undefined,
           ...(status.certificate ? { certificate: status.certificate } : {}),
@@ -519,7 +535,7 @@ export class WebInterface {
           ...(status.unseenCount !== undefined ? { unseenCount: status.unseenCount } : {}),
           bridgeHost: status.bridgeHost,
           bridgeImapPort: status.bridgeImapPort,
-          bridgeSmtpPort: status.bridgeSmtpPort ?? 0,
+          bridgeSmtpPort: status.bridgeSmtpPort,
           readOnly: status.readOnly === true,
           webPort: this.#port,
           uptimeMs: status.uptimeMs ?? 0,
@@ -591,6 +607,33 @@ export class WebInterface {
     })
   }
 
+  /**
+   * Reads a pair of ports out of a form.
+   *
+   * One place for it, because two forms carry them now: the bridge section and
+   * the advanced block of the sign-in page. A port that is wrong has to be
+   * caught before anything tries to connect with it, or the answer is
+   * "connection refused" and the cause is invisible.
+   */
+  static #readPorts(
+    fields: Record<string, string>,
+  ): { ports: { imapPort: number; smtpPort: number } } | { error: string } {
+    const parsed: Record<'imapPort' | 'smtpPort', number> = { imapPort: 0, smtpPort: 0 }
+    for (const field of ['imapPort', 'smtpPort'] as const) {
+      const raw = (fields[field] ?? '').trim()
+      const value = Number(raw)
+      if (!raw || !Number.isInteger(value) || value < 1 || value > 65535) {
+        return {
+          error:
+            `"${raw}" is not a usable port for ${field === 'imapPort' ? 'IMAP' : 'SMTP'}. ` +
+            'Expected a whole number between 1 and 65535.',
+        }
+      }
+      parsed[field] = value
+    }
+    return { ports: parsed }
+  }
+
   async #handlePorts(response: ServerResponse, fields: Record<string, string>): Promise<void> {
     if (!this.#options.onPorts) {
       await this.#render('bridge', response, {
@@ -599,20 +642,12 @@ export class WebInterface {
       return
     }
 
-    const parsed: Record<'imapPort' | 'smtpPort', number> = { imapPort: 0, smtpPort: 0 }
-    for (const field of ['imapPort', 'smtpPort'] as const) {
-      const raw = (fields[field] ?? '').trim()
-      const value = Number(raw)
-      if (!raw || !Number.isInteger(value) || value < 1 || value > 65535) {
-        await this.#render('bridge', response, {
-          error:
-            `"${raw}" is not a usable port for ${field === 'imapPort' ? 'IMAP' : 'SMTP'}. ` +
-            'Expected a whole number between 1 and 65535.',
-        })
-        return
-      }
-      parsed[field] = value
+    const read = WebInterface.#readPorts(fields)
+    if ('error' in read) {
+      await this.#render('bridge', response, { error: read.error })
+      return
     }
+    const parsed = read.ports
 
     const error = await this.#options.onPorts(parsed)
     await this.#render('bridge', response, {
@@ -683,6 +718,33 @@ export class WebInterface {
     if (storeError) {
       await this.#render('overview', response, { error: storeError, address, store })
       return
+    }
+
+    // The ports come first, before the credentials are tried. Somebody whose
+    // Bridge listens elsewhere would otherwise be told their password is wrong,
+    // because the attempt went to a port with nothing behind it. Only when the
+    // form carries them: the block is read-only when the environment decided.
+    if (this.#options.onPorts && fields.imapPort !== undefined) {
+      const read = WebInterface.#readPorts(fields)
+      if ('error' in read) {
+        await this.#render('overview', response, {
+          error: read.error,
+          address,
+          store,
+          showAdvanced: true,
+        })
+        return
+      }
+      const failed = await this.#options.onPorts(read.ports)
+      if (failed) {
+        await this.#render('overview', response, {
+          error: failed,
+          address,
+          store,
+          showAdvanced: true,
+        })
+        return
+      }
     }
 
     if (!address || !password) {

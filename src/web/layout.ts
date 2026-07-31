@@ -331,6 +331,21 @@ const STYLES = `
   button.danger:hover { background: var(--bad-bg); }
 
   .hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
+
+  /* The disclosure element, used where a setting is real but rarely needed. */
+  details.advanced summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+    list-style-position: outside;
+  }
+  details.advanced summary::marker { color: var(--muted); }
+  details.advanced[open] summary { margin-bottom: 8px; }
+  details.advanced input:disabled {
+    background: var(--code);
+    color: var(--muted);
+    cursor: not-allowed;
+  }
   /*
    * The storage options.
    *

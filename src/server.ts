@@ -36,7 +36,7 @@ import { registerActionTools } from './tools/actions.js'
 import { registerDraftTools } from './tools/drafts.js'
 import { registerSendTools } from './tools/send.js'
 import type { PendingSend } from './tools/confirm.js'
-import { setSignInHint } from './tools/failures.js'
+import { setSignInHint, setLockedCheck } from './tools/failures.js'
 import { setHandshakeCapabilities } from './tools/capabilities.js'
 import { registerGuidance, INSTRUCTIONS } from './tools/guidance.js'
 import { waitForIdle } from './in-flight.js'
@@ -258,6 +258,9 @@ async function main(): Promise<void> {
   // Every tool answer about a missing sign-in names this address, so the model
   // sends the user there instead of asking for the password in the chat.
   setSignInHint(() => (web.running ? web.url : undefined))
+  // So that a tool called while an encrypted file is still closed says what is
+  // actually missing: the master password, not the Bridge password.
+  setLockedCheck(() => session.locked())
 
   let webUrl: string | undefined
   try {
