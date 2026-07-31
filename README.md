@@ -36,6 +36,8 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `send_forward` | Forwards and sends, attachments and all |
 | `send_draft` | Sends a draft that is already written |
 
+Every tool that composes a message takes either `text` or `html`, never both: Proton drops the plain text half of a message that carries markup, so the half you confirmed would be the half that never arrived.
+
 Underneath: a held IMAP connection that recovers from a Bridge restart, stable identifiers based on the Message-ID, HTML to text conversion, filtering of the public key Proton attaches to every sent message, and a character budget so a single message cannot exhaust a context window.
 
 There is also a **local web interface**, on `127.0.0.1` only, running for as long as the server does:
@@ -210,7 +212,16 @@ Every tool that changes something is bounded on purpose:
 - **A label is not a destination for `move_messages`.** Moving a message into a label was measured to apply the label and leave the message where it is, so the tool refuses it instead of reporting a move that did not happen.
 - **A batch touches at most 50 messages**, and every one of them is accounted for in the answer, including the ones that failed and why.
 
-**A draft is the safe default.** The assistant prepares, you decide. Drafts and sent messages are plain text. Not because the transport cannot carry more, it can: measured, a formatted message goes through the Bridge with its styling, its links and an embedded animated image intact. The reason is the confirmation. A link's visible text and its target are the same string in plain text and two different strings in HTML, which is the shape of every phishing mail, and a confirmation that showed the reassuring half would be worse than none. Formatted messages need a confirmation that shows the text, every link target and every embedded file separately, which is [#22](https://github.com/RndmJoker/proton-mcp/issues/22). Attachments from files on this machine are deliberately not supported: a path named by a model, read by the server and carried out by the next confirmation is not a feature, it is a way out for anything on your disk. Forwarding loses nothing all the same, because the original message travels along whole.
+**A draft is the safe default.** The assistant prepares, you decide.
+
+**Messages can be plain text or formatted.** A formatted one may use headings, paragraphs, emphasis, lists, tables, links and images, with colour, font, alignment, spacing and borders. Anything outside that set is refused with a reason rather than quietly removed, because a message that was silently altered is no longer the message anyone agreed to.
+
+Formatting changes what a confirmation has to show, and that is the interesting part. In plain text a link's visible text and its target are the same string, so showing you the body shows you everything. In markup they are two strings, which is the shape of every phishing mail ever written. So the confirmation for a formatted message adds two blocks that are never shortened:
+
+- **Every address in the message**, links and images alike, each with the text it is shown as.
+- **Text a recipient can read that the body preview does not show.** Measured: an image's alt text never appears in the converted body, and mail clients block remote images by default, so the alt text is frequently what the recipient actually reads. That was a way past the confirmation, and it is closed.
+
+The set of permitted markup leaves out `style`, `script`, `noscript`, `textarea` and `head` by not listing them. Those are the elements whose content the preview and a mail client disagree about, and a list of what is allowed refuses them without anyone having had to think of them first. Attachments from files on this machine are deliberately not supported: a path named by a model, read by the server and carried out by the next confirmation is not a feature, it is a way out for anything on your disk. Forwarding loses nothing all the same, because the original message travels along whole.
 
 One thing worth knowing about drafts: Proton rewrites the thread headers of anything it stores. A reply is built with `In-Reply-To` and `References`, and what comes back has neither, only Proton's own internal thread id. Threading a stored draft is therefore Proton's business rather than this server's.
 

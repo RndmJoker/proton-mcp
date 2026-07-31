@@ -13,8 +13,10 @@
  */
 
 import MailComposer from 'nodemailer/lib/mail-composer/index.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { BridgeError } from '../bridge/errors.js'
+import { assertSendableMarkup, type MarkupUrl } from './markup.js'
+import { htmlToText } from '../mime/parse.js'
 
 /** An address, optionally with a display name. */
 export interface Recipient {
@@ -37,6 +39,31 @@ export interface Draft {
   messageId: string
   /** A whole message carried along, used when forwarding. */
   attachedMessage?: { filename: string; raw: Buffer }
+  /**
+   * The message as markup, when it has any.
+   *
+   * `text` stays filled either way and is what the confirmation reads, because
+   * a person confirming a send has to be shown something they can actually
+   * read. When only markup is given, the text is derived from it with the same
+   * conversion this server uses for received mail, which puts every link target
+   * beside the text it belongs to.
+   *
+   * Only one of the two is delivered. Proton keeps the markup and drops the
+   * text half of a message that carries both, measured, so composing both would
+   * mean the recipient never sees the part that was confirmed.
+   */
+  html?: string
+  /** Files referenced from the markup by content id. */
+  inlineParts?: InlinePart[]
+}
+
+/** A file carried inside the message and referenced from the markup. */
+export interface InlinePart {
+  /** Matches a `cid:` in the markup. */
+  contentId: string
+  filename: string
+  contentType: string
+  content: Buffer
 }
 
 /**
@@ -96,9 +123,9 @@ function angled(id: string): string {
 /**
  * Builds the MIME message.
  *
- * Plain text only. Proton strips the plain text part out of a multipart message
- * anyway (measured), so offering HTML would mean composing something the
- * recipient receives in a different shape than the one that was confirmed.
+ * A message carries either text or markup, never both. Measured: Proton keeps
+ * the markup and drops the text half of a message that has both, so composing
+ * both would deliver the half nobody confirmed.
  *
  * `keepBcc` decides whether the blind copies appear as a header in the built
  * message, and the two cases are opposites for a good reason. A message that
@@ -128,23 +155,51 @@ export async function buildMessage(
     from: draft.from,
     to: draft.to,
     subject: draft.subject,
-    text: draft.text,
     messageId: draft.messageId,
     date: new Date(),
+  }
+
+  if (draft.html === undefined) {
+    fields.text = draft.text
+  } else {
+    // Checked here rather than only at the tool, so that no path into this
+    // function can produce a message whose markup was never read.
+    const reading = assertSendableMarkup(draft.html)
+
+    // Every content id the markup points at has to have arrived with it. A
+    // reference to a part that is not there shows the recipient a broken image
+    // where the sender saw a picture, and neither of them finds out why.
+    const provided = new Set((draft.inlineParts ?? []).map((part) => part.contentId))
+    const missing = reading.contentIds.filter((id) => !provided.has(id))
+    if (missing.length) {
+      throw new BridgeError(
+        `The markup refers to ${missing.map((id) => `"cid:${id}"`).join(', ')}, but no such file ` +
+          'was given. Either provide the file or point the image at a full address instead.',
+      )
+    }
+    fields.html = draft.html
   }
   if (draft.cc.length) fields.cc = draft.cc
   if (draft.bcc.length) fields.bcc = draft.bcc
   if (draft.inReplyTo) fields.inReplyTo = angled(draft.inReplyTo)
   if (draft.references?.length) fields.references = draft.references.map(angled)
+  const attachments: Array<Record<string, unknown>> = []
   if (draft.attachedMessage) {
-    fields.attachments = [
-      {
-        filename: draft.attachedMessage.filename,
-        content: draft.attachedMessage.raw,
-        contentType: 'message/rfc822',
-      },
-    ]
+    attachments.push({
+      filename: draft.attachedMessage.filename,
+      content: draft.attachedMessage.raw,
+      contentType: 'message/rfc822',
+    })
   }
+  for (const part of draft.inlineParts ?? []) {
+    attachments.push({
+      filename: part.filename,
+      content: part.content,
+      contentType: part.contentType,
+      cid: part.contentId,
+    })
+  }
+  if (attachments.length) fields.attachments = attachments
 
   // keepBcc is not an option MailComposer understands. It lives on the MimeNode
   // that compile() hands back and is read when that node is built, so it has to
@@ -265,9 +320,65 @@ export const UTF8_NOTE =
  * The note says what to do instead, because a prohibition without an
  * alternative is an invitation to try anyway.
  */
+export const MARKUP_NOTE =
+  'A message may instead be written as markup, in the html field, which is delivered as ' +
+  'formatting rather than as visible tags. Give one or the other, not both: a message that ' +
+  'carries markup has its plain text half dropped, so the half that was confirmed would never ' +
+  'arrive. Permitted are headings, paragraphs, line breaks, rules, quotes, emphasis, lists, ' +
+  'tables, links and images, with colour, font, alignment, spacing and borders. Anything else ' +
+  'is refused rather than quietly removed, and the answer names what and why. Note that the ' +
+  'confirmation shows every address in the message in full, including the ones behind links and ' +
+  'images, and every alt text, because those are what a recipient reads.'
+
 export const PLAIN_TEXT_NOTE =
   'The body is plain text and markup is not interpreted. HTML written here is delivered as ' +
   'visible characters, so the recipient would read the tags rather than see formatting. ' +
   'Give a message its shape with line breaks, blank lines, indentation and plain lists, and ' +
-  'write a link as the bare address so that what is read is what is followed. Formatted ' +
-  'messages, with styled text and embedded images, are not supported yet.'
+  'write a link as the bare address so that what is read is what is followed.'
+
+/**
+ * The message as a person will read it.
+ *
+ * For a plain text message that is the text itself. For markup it is the same
+ * conversion this server applies to received mail, which is the point rather
+ * than a convenience: it writes every link target beside the text it belongs
+ * to, and that is exactly the difference a person confirming a send has to see.
+ */
+export function readableBody(draft: Draft): string {
+  return draft.html === undefined ? draft.text : htmlToText(draft.html)
+}
+
+/**
+ * Everything the message points at or carries, for the confirmation.
+ *
+ * Kept whole and never shortened. The body excerpt in a confirmation is cut
+ * after a few lines, so an address on line thirty would otherwise never be
+ * shown, which is precisely where one would be put to avoid being read.
+ */
+export function describeAttachments(draft: Draft): string[] {
+  const lines: string[] = []
+  if (draft.attachedMessage) {
+    lines.push(
+      `${draft.attachedMessage.filename} (the forwarded message, ${draft.attachedMessage.raw.length} bytes)`,
+    )
+  }
+  for (const part of draft.inlineParts ?? []) {
+    lines.push(`${part.filename} (${part.contentType}, ${part.content.length} bytes, in the message body)`)
+  }
+  return lines
+}
+
+/** The addresses in a message's markup, with the text they are shown as. */
+export function describeUrls(draft: Draft): MarkupUrl[] {
+  return draft.html === undefined ? [] : assertSendableMarkup(draft.html).urls
+}
+
+/** Text a recipient can read that the readable body leaves out. */
+export function hiddenTextOf(draft: Draft): string[] {
+  return draft.html === undefined ? [] : assertSendableMarkup(draft.html).hiddenText
+}
+
+/** A fingerprint of a file, so a confirmation can be bound to its contents. */
+export function fingerprintPart(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex').slice(0, 16)
+}

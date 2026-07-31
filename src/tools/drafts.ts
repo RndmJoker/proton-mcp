@@ -22,7 +22,7 @@ import {
   DRAFTS,
   type DraftResult,
 } from '../mail/drafts.js'
-import { describeRecipients, PLAIN_TEXT_NOTE, UTF8_NOTE } from '../mail/compose.js'
+import { describeRecipients, MARKUP_NOTE, PLAIN_TEXT_NOTE, UTF8_NOTE } from '../mail/compose.js'
 import { BridgeError } from '../bridge/errors.js'
 import { formatList } from './format.js'
 import { describeFailure, withSignIn } from './failures.js'
@@ -99,13 +99,23 @@ export function registerDraftTools(
         'Proton drops the plain text part of a message that also carries HTML, so composing HTML ' +
         'would mean the recipient sees something other than what was written here. ' +
         'Attachments from files on this machine are not supported on purpose. ' +
-        PLAIN_TEXT_NOTE + ' ' + UTF8_NOTE,
+        PLAIN_TEXT_NOTE + ' ' + MARKUP_NOTE + ' ' + UTF8_NOTE,
       inputSchema: z.object({
         to: addressList('The main recipients.'),
         cc: addressList('Recipients in copy, visible to everyone.'),
         bcc: addressList('Recipients in blind copy, hidden from the others but they do receive it.'),
         subject: z.string().optional().describe('The subject line.'),
         text: z.string().optional().describe('The body, as plain text.'),
+        html: z
+          .string()
+          .optional()
+          .describe(
+            'The body as markup instead of plain text. Give this or text, not both. Permitted ' +
+              'are headings, paragraphs, line breaks, rules, quotes, emphasis, lists, tables, ' +
+              'links and images, with colour, font, alignment, spacing and borders. Images may ' +
+              'point at a full address; anything outside the permitted set is refused with a ' +
+              'reason rather than removed.',
+          ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -132,7 +142,7 @@ export function registerDraftTools(
         'Replaces a draft with a changed version, keeping the same id. Fields that are not given ' +
         'are carried over, including the blind copies, which drafts written here keep. Only ' +
         'messages in the Drafts mailbox that carry the draft flag can be changed this way. ' +
-        PLAIN_TEXT_NOTE + ' ' + UTF8_NOTE,
+        PLAIN_TEXT_NOTE + ' ' + MARKUP_NOTE + ' ' + UTF8_NOTE,
       inputSchema: z.object({
         messageId: messageArgument,
         to: addressList('Replaces the main recipients.'),
@@ -140,6 +150,16 @@ export function registerDraftTools(
         bcc: addressList('Replaces the blind copies.'),
         subject: z.string().optional().describe('Replaces the subject.'),
         text: z.string().optional().describe('Replaces the body.'),
+        html: z
+          .string()
+          .optional()
+          .describe(
+            'Replaces the body with markup. Give this or text, not both. Permitted ' +
+              'are headings, paragraphs, line breaks, rules, quotes, emphasis, lists, tables, ' +
+              'links and images, with colour, font, alignment, spacing and borders. Images may ' +
+              'point at a full address; anything outside the permitted set is refused with a ' +
+              'reason rather than removed.',
+          ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -174,7 +194,7 @@ export function registerDraftTools(
         'Note on threading: the reply is built with In-Reply-To and References, but Proton replaces ' +
         'those with its own internal thread id when it stores a draft, so a draft that is stored ' +
         'and sent later carries Proton\'s idea of the conversation rather than ours. ' +
-        PLAIN_TEXT_NOTE + ' ' + UTF8_NOTE,
+        PLAIN_TEXT_NOTE + ' ' + MARKUP_NOTE + ' ' + UTF8_NOTE,
       inputSchema: z.object({
         messageId: messageArgument,
         text: z.string().describe('The reply itself. The original is quoted below it.'),
@@ -216,7 +236,7 @@ export function registerDraftTools(
         'Writes a forward of a message as a draft. The original is quoted below the new text, and ' +
         'when it carries attachments the whole original message is attached as well, so nothing of ' +
         'it is lost. Nothing is sent. ' +
-        PLAIN_TEXT_NOTE + ' ' + UTF8_NOTE,
+        PLAIN_TEXT_NOTE + ' ' + MARKUP_NOTE + ' ' + UTF8_NOTE,
       inputSchema: z.object({
         messageId: messageArgument,
         to: z.array(z.string()).min(1).describe('Who to forward it to.'),

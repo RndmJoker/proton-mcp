@@ -38,7 +38,17 @@
 import { createHash } from 'node:crypto'
 import { inputRequired, acceptedContent } from '@modelcontextprotocol/server'
 import type { CallToolResult, InputRequiredResult } from '@modelcontextprotocol/server'
-import { describeRecipients, firstLines, showRecipient, type Draft } from '../mail/compose.js'
+import {
+  describeAttachments,
+  describeRecipients,
+  describeUrls,
+  fingerprintPart,
+  firstLines,
+  hiddenTextOf,
+  readableBody,
+  showRecipient,
+  type Draft,
+} from '../mail/compose.js'
 import { canElicitForm } from './capabilities.js'
 
 /** The key our embedded elicitation is filed under. */
@@ -75,8 +85,18 @@ export function digestOf(draft: Draft): string {
     bcc: draft.bcc.map((r) => r.address).sort(),
     subject: draft.subject,
     text: draft.text,
+    // The markup source, not the readable rendering of it. Two messages can
+    // read identically and differ in every link target, which is the whole
+    // reason formatted mail needs a confirmation at all.
+    html: draft.html ?? null,
     inReplyTo: draft.inReplyTo ?? null,
     attached: draft.attachedMessage?.filename ?? null,
+    // The contents of every carried file, not just its name. A confirmation
+    // that covered the name alone would let the picture be swapped after it
+    // was agreed to.
+    parts: (draft.inlineParts ?? [])
+      .map((part) => `${part.contentId}:${part.contentType}:${fingerprintPart(part.content)}`)
+      .sort(),
   })
   return createHash('sha256').update(canonical).digest('hex')
 }
@@ -100,18 +120,50 @@ export function clientCanConfirm(ctx: unknown): boolean {
 
 /** What the message would look like to the person being asked. */
 export function describeForConfirmation(draft: Draft, what: string): string {
-  return [
+  const lines = [
     `${what} would be sent from ${showRecipient(draft.from)}.`,
     '',
     describeRecipients(draft),
     `Subject: ${draft.subject || '(no subject)'}`,
-    ...(draft.attachedMessage ? [`Attached: ${draft.attachedMessage.filename}`] : []),
     '',
     'The message begins:',
-    firstLines(draft.text),
+    firstLines(readableBody(draft)),
+  ]
+
+  // Everything below is shown in full and never shortened. The excerpt above
+  // stops after a few lines, and an address on line thirty is exactly where one
+  // would be put in order not to be read.
+  const urls = describeUrls(draft)
+  if (urls.length) {
+    lines.push('', `Every address in this message (${urls.length}):`)
+    for (const url of urls) {
+      const shown = url.kind === 'link' ? `shown as "${url.label || '(no text)'}"` : `image${url.label ? `, described as "${url.label}"` : ''}`
+      lines.push(`  ${url.url}`, `      ${shown}`)
+    }
+    lines.push(
+      '  A link\'s text and its address are two different things. Read the addresses.',
+    )
+  }
+
+  // Measured: an image's alt text is what a recipient reads, because clients
+  // block remote images by default, and it never appears in the body above.
+  const hidden = hiddenTextOf(draft)
+  if (hidden.length) {
+    lines.push('', 'Text a recipient can read that is not in the body above:')
+    for (const entry of hidden) lines.push(`  ${entry}`)
+  }
+
+  const files = describeAttachments(draft)
+  if (files.length) {
+    lines.push('', `Carried with it (${files.length}):`)
+    for (const file of files) lines.push(`  ${file}`)
+  }
+
+  lines.push(
     '',
     'Sending cannot be undone. Confirm only if these recipients are the ones you meant.',
-  ].join('\n')
+  )
+  return lines.join('\n')
 }
 
 /** The question, returned from the handler rather than pushed to the client. */

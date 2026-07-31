@@ -19,6 +19,7 @@ import type { RequestStateCodec } from '@modelcontextprotocol/server'
 import type { Connection } from '../bridge/connection.js'
 import type { Config, BridgeCredentials } from '../config.js'
 import { BridgeError } from '../bridge/errors.js'
+import { htmlToText } from '../mime/parse.js'
 import { sendMessage, type SendOutcome } from '../mail/send.js'
 import {
   buildReplyDraft,
@@ -31,6 +32,7 @@ import {
   mintMessageId,
   parseRecipient,
   parseRecipients,
+  MARKUP_NOTE,
   PLAIN_TEXT_NOTE,
   UTF8_NOTE,
   type Draft,
@@ -173,13 +175,23 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
     'send_message',
     {
       title: 'Send a message',
-      description: `Composes a message and sends it. ${CONFIRMATION_NOTE} ${PLAIN_TEXT_NOTE} ${UTF8_NOTE}`,
+      description: `Composes a message and sends it. ${CONFIRMATION_NOTE} ${PLAIN_TEXT_NOTE} ${MARKUP_NOTE} ${UTF8_NOTE}`,
       inputSchema: z.object({
         to: addressList('The main recipients.'),
         cc: addressList('Recipients in copy, visible to everyone.'),
         bcc: addressList('Recipients in blind copy. They receive it; the others do not see them.'),
         subject: z.string().default('').describe('The subject line.'),
-        text: z.string().describe('The body, as plain text.'),
+        text: z.string().default('').describe('The body, as plain text.'),
+        html: z
+          .string()
+          .optional()
+          .describe(
+            'The body as markup instead of plain text. Give this or text, not both. Permitted ' +
+              'are headings, paragraphs, line breaks, rules, quotes, emphasis, lists, tables, ' +
+              'links and images, with colour, font, alignment, spacing and borders. Images may ' +
+              'point at a full address; anything outside the permitted set is refused with a ' +
+              'reason rather than removed.',
+          ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -190,14 +202,24 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
             try {
               return await confirmed(deps, ctx, 'send_message', 'This message', async () => {
                 const from = parseRecipient(requireFrom(deps))
+                if (input.html !== undefined && input.text) {
+                  throw new BridgeError(
+                    'Both a text and a markup body were given. A message carries one or the ' +
+                      'other: Proton drops the text half of a message that has both, so the half ' +
+                      'that was confirmed would never arrive. Give whichever one this message is.',
+                  )
+                }
                 return {
                   from,
                   to: parseRecipients(input.to),
                   cc: parseRecipients(input.cc),
                   bcc: parseRecipients(input.bcc),
                   subject: input.subject,
-                  text: input.text,
+                  // The readable rendering, so that everything downstream can
+                  // read `text` and get something true.
+                  text: input.html !== undefined ? htmlToText(input.html) : input.text,
                   messageId: mintMessageId(from.address),
+                  ...(input.html !== undefined ? { html: input.html } : {}),
                 }
               })
             } catch (error) {
@@ -216,7 +238,7 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
         'Replies to a message and sends the reply, with the reference headers that put it in the ' +
         'same conversation. Unlike a reply written as a draft, this one keeps those headers: ' +
         'Proton rewrites them for anything it stores, and this is never stored before it goes. ' +
-        `${CONFIRMATION_NOTE} ${PLAIN_TEXT_NOTE} ${UTF8_NOTE}`,
+        `${CONFIRMATION_NOTE} ${PLAIN_TEXT_NOTE} ${MARKUP_NOTE} ${UTF8_NOTE}`,
       inputSchema: z.object({
         messageId: z.string().describe('The message being replied to.'),
         text: z.string().describe('The reply. The original is quoted below it.'),
@@ -253,7 +275,7 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
       title: 'Forward a message',
       description:
         'Forwards a message and sends it. The original is quoted, and when it carries attachments ' +
-        `the whole original travels along so nothing of it is lost. ${CONFIRMATION_NOTE} ${PLAIN_TEXT_NOTE} ${UTF8_NOTE}`,
+        `the whole original travels along so nothing of it is lost. ${CONFIRMATION_NOTE} ${PLAIN_TEXT_NOTE} ${MARKUP_NOTE} ${UTF8_NOTE}`,
       inputSchema: z.object({
         messageId: z.string().describe('The message being forwarded.'),
         to: z.array(z.string()).min(1).describe('Who to forward it to.'),
