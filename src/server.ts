@@ -31,6 +31,7 @@ import { registerListFolders } from './tools/list-folders.js'
 import { registerMessageTools } from './tools/messages.js'
 import { registerInterfaceTool } from './tools/interface.js'
 import { registerLabelTools } from './tools/labels.js'
+import { registerActionTools } from './tools/actions.js'
 import { setSignInHint } from './tools/failures.js'
 import { waitForIdle } from './in-flight.js'
 
@@ -261,6 +262,7 @@ async function main(): Promise<void> {
     // Read as a function rather than a value: whether the server may write is a
     // property of the configuration, and the tools should ask at call time.
     registerLabelTools(server, connection, () => config.readOnly)
+    registerActionTools(server, connection, () => config.readOnly)
     registerInterfaceTool(server, {
       url: () => web.url,
       running: () => web.running,

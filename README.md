@@ -23,6 +23,9 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `get_attachment` | One attachment by index, textual types only |
 | `add_label` | Applies an existing label. The message stays in its folder |
 | `remove_label` | Removes a label. Folder, other labels and the message itself are untouched |
+| `move_messages` | Moves messages into a folder. Labels survive the move |
+| `set_flags` | Marks read or unread and sets or clears the star |
+| `trash_messages` | Moves messages to the trash, which is what deletion means here |
 
 Underneath: a held IMAP connection that recovers from a Bridge restart, stable identifiers based on the Message-ID, HTML to text conversion, filtering of the public key Proton attaches to every sent message, and a character budget so a single message cannot exhaust a context window.
 
@@ -191,12 +194,16 @@ The content of someone else's email is text written by strangers, and it is hand
 
 ### Writing to your mailbox
 
-Applying and removing labels are the only tools that change anything, and they are bounded on purpose:
+Every tool that changes something is bounded on purpose:
 
 - **`PROTON_MCP_READ_ONLY=true` refuses every write**, and the interface reports the mode it is in. Reading keeps working.
+- **Nothing is ever deleted for good.** `trash_messages` moves messages to the trash, where Proton keeps them and where `move_messages` can take them back out. There is no tool that empties the trash.
 - **Removing a label is an expunge inside the label's own mailbox.** The same command aimed at a folder would delete mail, so the code refuses any path outside `Labels/`, checked again in the line immediately before the expunge. A label name containing a path separator is rejected rather than repaired.
 - **Labels are never created**, only applied. Create them in Proton itself.
-- **The message is untouched.** It keeps its folder, its other labels, and it does not go to trash.
+- **A label is not a destination for `move_messages`.** Moving a message into a label was measured to apply the label and leave the message where it is, so the tool refuses it instead of reporting a move that did not happen.
+- **A batch touches at most 50 messages**, and every one of them is accounted for in the answer, including the ones that failed and why.
+
+Writes need a moment to settle. A move takes roughly fifteen seconds to reconcile with Proton, and until then the Bridge lists the message in both places, so the tools say so rather than reading back an intermediate state and calling it the result. Flags are the exception: those hold immediately.
 
 ### What lands on your disk
 
