@@ -66,10 +66,13 @@ const PERMITTED_ATTRIBUTES: Record<string, string[]> = {
   '*': ['style', 'title', 'dir', 'lang'],
   a: ['href', 'target', 'rel'],
   img: ['src', 'alt', 'width', 'height'],
-  table: ['width', 'border', 'cellpadding', 'cellspacing', 'align'],
-  td: ['colspan', 'rowspan', 'align', 'valign', 'width'],
-  th: ['colspan', 'rowspan', 'align', 'valign', 'width'],
-  tr: ['align', 'valign'],
+  // height sits beside width rather than being an omission with a reason. A
+  // table cell of a given height hides nothing: its content still renders, and
+  // the properties that do hide are refused as styles further down.
+  table: ['width', 'height', 'border', 'cellpadding', 'cellspacing', 'align'],
+  td: ['colspan', 'rowspan', 'align', 'valign', 'width', 'height'],
+  th: ['colspan', 'rowspan', 'align', 'valign', 'width', 'height'],
+  tr: ['align', 'valign', 'height'],
   ol: ['start', 'type'],
   blockquote: ['cite'],
 }

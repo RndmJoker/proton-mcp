@@ -205,3 +205,16 @@ describe('the list itself', () => {
     }
   })
 })
+
+describe('what real email layout needs', () => {
+  it('allows the table attributes a message is actually laid out with', () => {
+    // Found while writing a real message rather than while thinking about one.
+    // height was missing beside width, which is an omission and not a decision:
+    // a cell of a given height hides nothing, and the properties that do hide
+    // are refused as styles.
+    const html =
+      '<table width="600" height="80" cellpadding="0" cellspacing="0" border="0">' +
+      '<tr height="46"><td width="46" height="46" align="center" valign="middle">x</td></tr></table>'
+    expect(readMarkup(html).problems).toEqual([])
+  })
+})
