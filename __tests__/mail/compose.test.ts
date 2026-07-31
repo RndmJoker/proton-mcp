@@ -69,8 +69,10 @@ describe('buildMessage', () => {
       await buildMessage(
         draft({
           cc: [{ address: 'copy@example.com' }],
-          subject: 'Hallo mit Umlauten: äöü',
-          text: 'Grüße',
+          // Non-ASCII on purpose: the subject has to be encoded rather than
+          // written out, and a test of that needs characters that force it.
+          subject: 'Encoding check: caf\u00e9, na\u00efve, \u00a3, \u65e5\u672c',
+          text: 'Body with a non-ASCII character: \u00e9',
         }),
       )
     ).toString('utf8')
@@ -152,11 +154,11 @@ describe('mintMessageId', () => {
 
 describe('prefixSubject', () => {
   it('adds a prefix once, in either language', () => {
-    expect(prefixSubject('Bericht', 'Re')).toBe('Re: Bericht')
-    expect(prefixSubject('Re: Bericht', 'Re')).toBe('Re: Bericht')
-    expect(prefixSubject('AW: Bericht', 'Re')).toBe('AW: Bericht')
-    expect(prefixSubject('Bericht', 'Fwd')).toBe('Fwd: Bericht')
-    expect(prefixSubject('Fw: Bericht', 'Fwd')).toBe('Fw: Bericht')
+    expect(prefixSubject('Report', 'Re')).toBe('Re: Report')
+    expect(prefixSubject('Re: Report', 'Re')).toBe('Re: Report')
+    expect(prefixSubject('AW: Report', 'Re')).toBe('AW: Report')
+    expect(prefixSubject('Report', 'Fwd')).toBe('Fwd: Report')
+    expect(prefixSubject('Fw: Report', 'Fwd')).toBe('Fw: Report')
   })
 
   it('says something rather than nothing for an empty subject', () => {
@@ -169,7 +171,7 @@ describe('quote', () => {
     const text = quote({
       from: [{ name: 'Jane', address: 'jane@example.com' }],
       date: new Date('2026-07-31T09:00:00Z'),
-      subject: 'Bericht',
+      subject: 'Report',
       text: 'one\ntwo',
     })
     expect(text).toContain('Jane <jane@example.com> wrote:')

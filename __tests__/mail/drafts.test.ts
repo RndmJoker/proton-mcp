@@ -34,11 +34,11 @@ const SOURCE = [
   'From: Jane Doe <jane@example.com>',
   'To: me@example.com, other@example.com',
   'Cc: watcher@example.com',
-  'Subject: Bericht',
+  'Subject: Report',
   'Date: Fri, 31 Jul 2026 09:00:00 +0000',
   'Content-Type: text/plain; charset=utf-8',
   '',
-  'Der eigentliche Text.',
+  'The actual text of the message.',
 ].join('\r\n')
 
 function fakeConnection(options: FakeOptions = {}) {
@@ -99,7 +99,7 @@ describe('createDraft', () => {
     const { connection, recorded } = fakeConnection()
     const draft = await createDraft(connection, false, ME, {
       to: ['you@example.com'],
-      subject: 'Hallo',
+      subject: 'Hello',
       text: 'Text',
     })
     expect(recorded.appends).toHaveLength(1)
@@ -147,14 +147,14 @@ describe('updateDraft', () => {
     // That order matters. The other way round, a failed append would leave the
     // mailbox with neither version.
     const { connection, recorded } = fakeConnection()
-    await updateDraft(connection, false, ME, '<one@example.com>', { subject: 'Neu' })
+    await updateDraft(connection, false, ME, '<one@example.com>', { subject: 'Changed' })
     expect(recorded.appends).toHaveLength(1)
     expect(recorded.deletes).toEqual([{ uid: '4', mailbox: DRAFTS }])
   })
 
   it('expunges only inside Drafts', async () => {
     const { connection, recorded } = fakeConnection()
-    await updateDraft(connection, false, ME, '<one@example.com>', { subject: 'Neu' })
+    await updateDraft(connection, false, ME, '<one@example.com>', { subject: 'Changed' })
     for (const d of recorded.deletes) expect(d.mailbox).toBe(DRAFTS)
   })
 
@@ -163,7 +163,7 @@ describe('updateDraft', () => {
     // happens to be sitting in Drafts.
     const { connection, recorded } = fakeConnection({ existingFlags: ['\\Seen'] })
     await expect(
-      updateDraft(connection, false, ME, '<one@example.com>', { subject: 'Neu' }),
+      updateDraft(connection, false, ME, '<one@example.com>', { subject: 'Changed' }),
     ).rejects.toThrow(/does not carry the draft flag/)
     expect(recorded.deletes).toEqual([])
     expect(recorded.appends).toEqual([])
@@ -172,14 +172,14 @@ describe('updateDraft', () => {
   it('says so when there is no such draft, rather than writing a new one', async () => {
     const { connection, recorded } = fakeConnection({ empty: true })
     await expect(
-      updateDraft(connection, false, ME, '<one@example.com>', { subject: 'Neu' }),
+      updateDraft(connection, false, ME, '<one@example.com>', { subject: 'Changed' }),
     ).rejects.toThrow(/No draft with the id/)
     expect(recorded.appends).toEqual([])
   })
 
   it('carries over what was not named', async () => {
     const { connection, recorded } = fakeConnection()
-    await updateDraft(connection, false, ME, '<original@example.com>', { subject: 'Neu' })
+    await updateDraft(connection, false, ME, '<original@example.com>', { subject: 'Changed' })
     const written = recorded.appends[0]?.raw ?? ''
     // The recipients of the stored version survive a change of subject.
     expect(written).toContain('me@example.com')
@@ -207,7 +207,7 @@ describe('replyDraft', () => {
     // A reply without In-Reply-To and References starts a new conversation that
     // merely shares a subject, and every mail reader shows it as one.
     const { connection, recorded } = fakeConnection()
-    await replyDraft(connection, false, ME, '<original@example.com>', 'Meine Antwort')
+    await replyDraft(connection, false, ME, '<original@example.com>', 'My reply')
     const written = recorded.appends[0]?.raw ?? ''
     expect(written).toContain('In-Reply-To: <original@example.com>')
     expect(written).toContain('<first@example.com>')
@@ -216,15 +216,15 @@ describe('replyDraft', () => {
 
   it('replies to the sender and leaves the others out', async () => {
     const { connection, recorded } = fakeConnection()
-    const draft = await replyDraft(connection, false, ME, '<original@example.com>', 'Antwort')
+    const draft = await replyDraft(connection, false, ME, '<original@example.com>', 'A reply')
     expect(draft.to.map((t) => t.address)).toEqual(['jane@example.com'])
     expect(draft.cc).toEqual([])
-    expect(recorded.appends[0]?.raw).toContain('Subject: Re: Bericht')
+    expect(recorded.appends[0]?.raw).toContain('Subject: Re: Report')
   })
 
   it('puts the others in copy when asked, but never ourselves', async () => {
     const { connection } = fakeConnection()
-    const draft = await replyDraft(connection, false, ME, '<original@example.com>', 'Antwort', {
+    const draft = await replyDraft(connection, false, ME, '<original@example.com>', 'A reply', {
       all: true,
     })
     const cc = draft.cc.map((c) => c.address)
@@ -235,10 +235,10 @@ describe('replyDraft', () => {
 
   it('quotes the original below the new text', async () => {
     const { connection, recorded } = fakeConnection()
-    await replyDraft(connection, false, ME, '<original@example.com>', 'Meine Antwort')
+    await replyDraft(connection, false, ME, '<original@example.com>', 'My reply')
     const written = recorded.appends[0]?.raw ?? ''
-    expect(written).toContain('Meine Antwort')
-    expect(written).toContain('> Der eigentliche Text.')
+    expect(written).toContain('My reply')
+    expect(written).toContain('> The actual text of the message.')
   })
 
   it('refuses when the only address on the message is our own', async () => {
@@ -247,14 +247,14 @@ describe('replyDraft', () => {
       .replace('Cc: watcher@example.com', `Cc: ${ME}`)
     const { connection } = fakeConnection({ source: onlyMe })
     await expect(
-      replyDraft(connection, false, ME, '<original@example.com>', 'Antwort'),
+      replyDraft(connection, false, ME, '<original@example.com>', 'A reply'),
     ).rejects.toThrow(/nobody to reply to/)
   })
 
   it('writes nothing while the server is read-only', async () => {
     const { connection, recorded } = fakeConnection()
     await expect(
-      replyDraft(connection, true, ME, '<original@example.com>', 'Antwort'),
+      replyDraft(connection, true, ME, '<original@example.com>', 'A reply'),
     ).rejects.toThrow(/read-only/)
     expect(recorded.appends).toEqual([])
   })
@@ -269,12 +269,12 @@ describe('forwardDraft', () => {
       ME,
       '<original@example.com>',
       ['third@example.com'],
-      'Zur Kenntnis',
+      'For your information',
     )
-    expect(draft.subject).toBe('Fwd: Bericht')
+    expect(draft.subject).toBe('Fwd: Report')
     const written = recorded.appends[0]?.raw ?? ''
     expect(written).toContain('Forwarded message')
-    expect(written).toContain('Zur Kenntnis')
+    expect(written).toContain('For your information')
   })
 
   it('does not carry the thread headers of the original', async () => {

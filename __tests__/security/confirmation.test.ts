@@ -161,8 +161,8 @@ describe('describeForConfirmation', () => {
   })
 
   it('shows the beginning of the body', () => {
-    const text = describeForConfirmation(draft({ text: 'Erste Zeile\nZweite Zeile' }), 'This')
-    expect(text).toContain('Erste Zeile')
+    const text = describeForConfirmation(draft({ text: 'First line\nSecond line' }), 'This')
+    expect(text).toContain('First line')
   })
 
   it('says that sending cannot be undone', () => {

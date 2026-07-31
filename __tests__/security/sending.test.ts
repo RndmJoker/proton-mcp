@@ -92,7 +92,7 @@ const answered = (state: string, confirm: unknown = true) =>
     inputResponses: { [CONFIRM_KEY]: { action: 'accept', content: { confirm } } },
   })
 
-const MESSAGE = { to: ['you@example.com'], subject: 'Hallo', text: 'Text' }
+const MESSAGE = { to: ['you@example.com'], subject: 'Hello', text: 'Text' }
 
 beforeEach(() => {
   sent.length = 0
