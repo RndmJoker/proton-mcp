@@ -12,9 +12,11 @@ import {
   withSignIn,
   setSignInHint,
   setLockedCheck,
+  describeFailure,
   _clearSignInHint,
 } from '../../src/tools/failures.js'
 import { NotSignedInError } from '../../src/bridge/connection.js'
+import { explainError } from '../../src/bridge/errors.js'
 import { BridgeError } from '../../src/bridge/errors.js'
 
 /**
@@ -354,5 +356,57 @@ describe('credentials that are only locked', () => {
       throw new NotSignedInError('nothing stored')
     })
     expect(text(result)).toContain('not signed in to Proton Mail Bridge yet')
+  })
+})
+
+
+describe('a Bridge that cannot be reached', () => {
+  /**
+   * The message from errors.ts says what happened. What is checked here is the
+   * part that says who has to act, because without it a model either retries in
+   * a loop or offers to start an application it cannot reach.
+   */
+  it('tells the agent that only the user can start the Bridge', () => {
+    setSignInHint(() => url)
+    const failure = explainError({ code: 'ECONNREFUSED' }, '127.0.0.1', 1143)
+    const answer = text(describeFailure(failure, 'listing mailboxes'))
+
+    expect(answer).toContain('start and unlock it themselves')
+    expect(answer).toContain('Do not retry in a loop')
+    expect(answer).toContain(url)
+  })
+
+  it('sends a rejected password to the page rather than into the chat', () => {
+    setSignInHint(() => url)
+    const failure = explainError({ responseText: 'AUTHENTICATIONFAILED' }, '127.0.0.1', 1143)
+    const answer = text(describeFailure(failure, 'listing mailboxes'))
+
+    expect(answer).toContain('enter the current one')
+    expect(answer).toContain('Do not ask for it in this conversation')
+    expect(answer).toContain(url)
+  })
+
+  it('distinguishes not ready from not running', () => {
+    setSignInHint(() => url)
+    const answer = text(
+      describeFailure(explainError({ code: 'ETIMEDOUT' }, '127.0.0.1', 1143), 'listing'),
+    )
+    expect(answer).toContain('not ready yet')
+    expect(answer).not.toContain('Do not retry in a loop')
+  })
+
+  it('adds nothing where the interface cannot help', () => {
+    setSignInHint(() => url)
+    const failure = explainError(new Error('self-signed certificate'), '127.0.0.1', 1143)
+    const answer = text(describeFailure(failure, 'listing'))
+    expect(answer).toBe(failure.message)
+  })
+
+  it('leaves out the address when no page is running', () => {
+    const answer = text(
+      describeFailure(explainError({ code: 'ECONNREFUSED' }, '127.0.0.1', 1143), 'listing'),
+    )
+    expect(answer).toContain('start and unlock it themselves')
+    expect(answer).not.toContain('The configuration page is at')
   })
 })

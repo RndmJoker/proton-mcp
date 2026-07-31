@@ -155,7 +155,8 @@ export async function sendMessage(
   } catch (error) {
     throw new BridgeError(
       `The Bridge did not accept the message: ${(error as Error).message}. ` +
-        'Nothing was sent. Check that the Bridge is running and unlocked.',
+        'Nothing was sent, and it can be sent again once the Bridge is reachable.',
+      'unreachable',
       { cause: error },
     )
   } finally {
