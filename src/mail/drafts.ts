@@ -29,6 +29,9 @@
  * carries Proton's idea of the thread and not ours. Sending a reply with headers
  * we control means building it and sending it without storing it in between,
  * which is why replying is also a sending tool and not only a draft tool.
+ * Measured on the other side of that fence: a message handed to SMTP keeps its
+ * `In-Reply-To`. So the difference is real, and it is a difference between
+ * storing and sending rather than a limitation of what we can build.
  *
  * The dangerous line is the expunge in updateDraft. It is the same operation
  * that removes a label, and aimed at the wrong mailbox it deletes mail, so it
@@ -133,6 +136,20 @@ async function findDraft(
     const message = await client.fetchOne(String(uid), { flags: true }, { uid: true })
     return { uid, flags: message && message.flags ? message.flags : new Set<string>() }
   })
+}
+
+/** Writes a built message into Drafts and describes what was stored. */
+async function store(connection: Connection, draft: Draft): Promise<DraftResult> {
+  const raw = await buildMessage(draft, { keepBcc: true })
+  const uid = await appendDraft(connection, raw)
+  return {
+    messageId: draft.messageId,
+    subject: draft.subject,
+    to: draft.to,
+    cc: draft.cc,
+    bcc: draft.bcc,
+    uid,
+  }
 }
 
 /** Creates a draft from scratch. */
@@ -290,16 +307,13 @@ function withoutSelf(list: Recipient[], self: string): Recipient[] {
  * reply without In-Reply-To and References is a new conversation that happens
  * to share a subject, and every mail reader will show it as one.
  */
-export async function replyDraft(
+export async function buildReplyDraft(
   connection: Connection,
-  readOnly: boolean,
   fromAddress: string,
   messageId: string,
   text: string,
   options: { all?: boolean; mailbox?: string } = {},
-): Promise<DraftResult> {
-  assertWritable(readOnly, 'creating a reply draft')
-
+): Promise<Draft> {
   const original = await getMessage(connection, messageId, {
     ...(options.mailbox ? { hint: options.mailbox } : {}),
   })
@@ -337,16 +351,21 @@ export async function replyDraft(
     references: [...thread.references, ...(thread.messageId ? [thread.messageId] : [])],
   }
 
-  const raw = await buildMessage(draft, { keepBcc: true })
-  const uid = await appendDraft(connection, raw)
-  return {
-    messageId: draft.messageId,
-    subject: draft.subject,
-    to: draft.to,
-    cc: draft.cc,
-    bcc: draft.bcc,
-    uid,
-  }
+  return draft
+}
+
+/** Prepares a reply and stores it as a draft. */
+export async function replyDraft(
+  connection: Connection,
+  readOnly: boolean,
+  fromAddress: string,
+  messageId: string,
+  text: string,
+  options: { all?: boolean; mailbox?: string } = {},
+): Promise<DraftResult> {
+  assertWritable(readOnly, 'creating a reply draft')
+  const draft = await buildReplyDraft(connection, fromAddress, messageId, text, options)
+  return store(connection, draft)
 }
 
 /** The uid of a message inside one mailbox. */
@@ -370,17 +389,14 @@ async function uidOf(connection: Connection, path: string, messageId: string): P
  * keeps everything, needs nothing from the local disk, and cannot quietly lose
  * a file the way a re-encoded copy can.
  */
-export async function forwardDraft(
+export async function buildForwardDraft(
   connection: Connection,
-  readOnly: boolean,
   fromAddress: string,
   messageId: string,
   to: string[],
   text: string,
   options: { mailbox?: string } = {},
-): Promise<DraftResult> {
-  assertWritable(readOnly, 'creating a forward draft')
-
+): Promise<Draft> {
   const original = await getMessage(connection, messageId, {
     ...(options.mailbox ? { hint: options.mailbox } : {}),
   })
@@ -425,19 +441,25 @@ export async function forwardDraft(
     }
   }
 
-  const raw = await buildMessage(draft, { keepBcc: true })
-  const uid = await appendDraft(connection, raw)
-  return {
-    messageId: draft.messageId,
-    subject: draft.subject,
-    to: draft.to,
-    cc: draft.cc,
-    bcc: draft.bcc,
-    uid,
-    ...(draft.attachedMessage
-      ? { carriedAttachments: original.attachments.map((a) => a.filename) }
-      : {}),
-  }
+  return draft
+}
+
+/** Prepares a forward and stores it as a draft. */
+export async function forwardDraft(
+  connection: Connection,
+  readOnly: boolean,
+  fromAddress: string,
+  messageId: string,
+  to: string[],
+  text: string,
+  options: { mailbox?: string } = {},
+): Promise<DraftResult> {
+  assertWritable(readOnly, 'creating a forward draft')
+  const draft = await buildForwardDraft(connection, fromAddress, messageId, to, text, options)
+  const stored = await store(connection, draft)
+  return draft.attachedMessage
+    ? { ...stored, carriedAttachments: [draft.attachedMessage.filename] }
+    : stored
 }
 
 /** The drafts that are there. Reading only. */
@@ -450,4 +472,54 @@ export async function listDrafts(
     offset: options.offset ?? 0,
     unreadOnly: false,
   })
+}
+
+/**
+ * Reads a stored draft back as a message ready to be sent.
+ *
+ * Looked up in "Drafts" alone, and required to carry the draft flag: sending
+ * whatever happens to be sitting there under a caller's chosen identifier is
+ * not what a caller asking to send a draft means.
+ *
+ * The thread headers are not recovered, and cannot be. Proton replaces them
+ * when it stores a draft, so a reply written as a draft and sent later goes out
+ * with Proton's internal thread id rather than the chain it was built with.
+ * send_reply exists precisely so that a reply need not take this route.
+ */
+export async function readDraftForSending(
+  connection: Connection,
+  fromAddress: string,
+  messageId: string,
+): Promise<Draft> {
+  const id = normaliseMessageId(messageId)
+  const existing = await findDraft(connection, id)
+  if (!existing) {
+    throw new BridgeError(
+      `No draft with the id ${id} is in "${DRAFTS}". Use list_drafts to see what is there.`,
+    )
+  }
+  if (!existing.flags.has('\\Draft')) {
+    throw new BridgeError(
+      `The message ${id} is in "${DRAFTS}" but does not carry the draft flag, so it is not a ` +
+        'draft. Refusing to send it.',
+    )
+  }
+
+  const stored = await getMessage(connection, id, { hint: DRAFTS })
+  if (stored.to.length === 0 && stored.cc.length === 0 && stored.bcc.length === 0) {
+    throw new BridgeError(
+      `The draft ${id} has no recipient, so there is nobody to send it to. Add one with ` +
+        'update_draft first.',
+    )
+  }
+
+  return {
+    from: parseRecipient(fromAddress),
+    to: stored.to,
+    cc: stored.cc,
+    bcc: stored.bcc,
+    subject: stored.subject,
+    text: stored.text,
+    messageId: id,
+  }
 }

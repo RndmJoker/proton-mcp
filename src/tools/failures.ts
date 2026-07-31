@@ -81,7 +81,9 @@ export function describeFailure(error: unknown, context: string): CallToolResult
  */
 export async function withSignIn(
   ctx: unknown,
-  work: () => Promise<CallToolResult>,
+  // The work may itself want a round trip through the client. Sending does:
+  // it asks for a confirmation the same way this asks for a sign-in.
+  work: () => Promise<CallToolResult | InputRequiredResult>,
 ): Promise<CallToolResult | InputRequiredResult> {
   try {
     return await work()

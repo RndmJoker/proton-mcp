@@ -12,7 +12,8 @@
  */
 
 import { createRequire } from 'node:module'
-import { McpServer } from '@modelcontextprotocol/server'
+import { randomBytes } from 'node:crypto'
+import { McpServer, createRequestStateCodec } from '@modelcontextprotocol/server'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import {
   loadConfig,
@@ -33,6 +34,8 @@ import { registerInterfaceTool } from './tools/interface.js'
 import { registerLabelTools } from './tools/labels.js'
 import { registerActionTools } from './tools/actions.js'
 import { registerDraftTools } from './tools/drafts.js'
+import { registerSendTools } from './tools/send.js'
+import type { PendingSend } from './tools/confirm.js'
 import { setSignInHint } from './tools/failures.js'
 import { waitForIdle } from './in-flight.js'
 
@@ -256,8 +259,37 @@ async function main(): Promise<void> {
     notify(`${(error as Error).message} Continuing without it.`)
   }
 
+  /**
+   * Seals the confirmation that has to survive a round trip through the client.
+   *
+   * The key is random and lives only in this process, which is exactly right
+   * here: the server speaks over stdio, so the same process serves every round
+   * of a flow, and a key that never reaches disk cannot be stolen from it. A
+   * restart invalidates any confirmation in flight, which is the safe direction
+   * to fail in.
+   *
+   * Bound to the request method as well, so a sealed state cannot be lifted out
+   * of one kind of request and presented in another. Which tool it belongs to is
+   * checked separately, in the handler.
+   */
+  const sendCodec = createRequestStateCodec<PendingSend>({
+    key: randomBytes(32),
+    // Long enough to read a confirmation and think about it, short enough that
+    // a yes does not stay usable for the rest of the day.
+    ttlSeconds: 300,
+    bind: (requestCtx) => String(requestCtx.mcpReq?.method ?? ''),
+  })
+
   const handle = serveStdio(() => {
-    const server = new McpServer({ name: NAME, version: VERSION })
+    const server = new McpServer(
+      { name: NAME, version: VERSION },
+      {
+        // Verifies the seal before a handler ever runs, and hands the decoded
+        // payload to it. Without this the state would come back as a raw
+        // string the client could have written itself.
+        requestState: { verify: sendCodec.verify },
+      },
+    )
     registerListFolders(server, connection)
     registerMessageTools(server, connection)
     // Read as a function rather than a value: whether the server may write is a
@@ -265,6 +297,14 @@ async function main(): Promise<void> {
     registerLabelTools(server, connection, () => config.readOnly)
     registerActionTools(server, connection, () => config.readOnly)
     registerDraftTools(server, connection, () => config.readOnly, () => session.address)
+    registerSendTools(server, {
+      config,
+      connection,
+      getCredentials: () => session.credentials(),
+      readOnly: () => config.readOnly,
+      from: () => session.address,
+      codec: sendCodec,
+    })
     registerInterfaceTool(server, {
       url: () => web.url,
       running: () => web.running,

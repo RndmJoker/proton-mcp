@@ -2,7 +2,7 @@
 
 An MCP server for Proton Mail. It talks to a locally running Proton Mail Bridge and makes your mailbox available to AI assistants such as Claude.
 
-**Status: under construction.** Reading works and can be used, and so does signing in through the browser. Labels, moving between folders, read state, trash and drafts all work. Sending does not exist yet, so nothing this server does can leave your machine. See [Status](#status) for the details.
+**Status: under construction.** Reading works and can be used, and so does signing in through the browser. Labels, moving between folders, read state, trash, drafts and sending all work. Every send asks you first, and that question is enforced by the server rather than requested in a prompt. See [Status](#status) for the details.
 
 ## Why everything runs locally
 
@@ -31,6 +31,10 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `reply_draft` | Prepares a reply as a draft, with the original quoted |
 | `forward_draft` | Prepares a forward as a draft, attachments and all |
 | `list_drafts` | The drafts, newest first |
+| `send_message` | Composes and sends. Asks you first, always |
+| `send_reply` | Replies and sends, keeping the conversation intact |
+| `send_forward` | Forwards and sends, attachments and all |
+| `send_draft` | Sends a draft that is already written |
 
 Underneath: a held IMAP connection that recovers from a Bridge restart, stable identifiers based on the Message-ID, HTML to text conversion, filtering of the public key Proton attaches to every sent message, and a character budget so a single message cannot exhaust a context window.
 
@@ -56,7 +60,6 @@ This table says what the server cannot do today. The issue behind each entry say
 
 | Missing | Tracked in |
 | :--- | :--- |
-| Sending, replying and forwarding, with the mandatory confirmation | [#4](https://github.com/RndmJoker/proton-mcp/issues/4) |
 | Attachments composed from files on this machine | not tracked yet, see the note under Writing to your mailbox |
 | Publication on npm, so installation via `npx` | [#7](https://github.com/RndmJoker/proton-mcp/issues/7) |
 | A single prompt that sets a client up on its own | [#8](https://github.com/RndmJoker/proton-mcp/issues/8) |
@@ -212,6 +215,21 @@ Every tool that changes something is bounded on purpose:
 One thing worth knowing about drafts: Proton rewrites the thread headers of anything it stores. A reply is built with `In-Reply-To` and `References`, and what comes back has neither, only Proton's own internal thread id. Threading a stored draft is therefore Proton's business rather than this server's.
 
 Writes need a moment to settle. A move takes roughly fifteen seconds to reconcile with Proton, and until then the Bridge lists the message in both places, so the tools say so rather than reading back an intermediate state and calling it the result. Flags are the exception: those hold immediately.
+
+### Sending, and the question you cannot switch off
+
+Mail is text written by strangers, handed to a model that can call tools. A message can politely ask to be forwarded somewhere, and other projects answer that with a line in a system prompt. **A system prompt is not a security boundary.** This one lives in the server:
+
+- **Nothing is sent without a person saying yes.** The first call never sends. It returns a question through your client showing the final recipients separated into To, Cc and Bcc, the subject, and the first lines. Only the second call, carrying your answer, sends.
+- **There is no setting that turns the question off.** Not an environment variable, not an argument, not a mode.
+- **A client that cannot ask cannot send.** If your client does not support form elicitation, sending is refused and you are pointed at drafts instead. That is deliberately different from the sign-in prompt, which falls back to text: the worst outcome there is an inconvenience, and here it is a message that cannot be recalled.
+- **Your yes covers one specific message.** A fingerprint of the sender, every recipient, the subject and the body is sealed with an HMAC whose key exists only in the running process, and it travels with the question. On the way back the fingerprint is recomputed from what is being asked for now. If a single address was added in between, nothing is sent. A confirmation is also bound to the tool that asked, so one cannot be reused for another.
+- **Blind copies stay blind.** They travel in the envelope and never appear in the headers the recipients see. Verified against a real delivery.
+- **The Bridge password is protected on the way out too.** SMTP is verified against the same pinned certificate as IMAP, and STARTTLS is required rather than merely attempted.
+
+Replying and forwarding exist as sending tools of their own, not just as drafts. The reason is measured: Proton rewrites the thread headers of anything it stores, so a reply written to a draft and sent later loses the chain, while a reply handed straight to SMTP keeps its `In-Reply-To` and stays in the conversation.
+
+After a send, nothing checks its own work. The Bridge took about six and a half seconds to accept a message and the message appeared over IMAP about three seconds after that, so an immediate look would describe a state that is not the outcome.
 
 ### What lands on your disk
 
