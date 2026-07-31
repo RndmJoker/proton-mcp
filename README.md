@@ -42,19 +42,19 @@ The server also tells an assistant how it works, so the rules are not something 
 
 Underneath: a held IMAP connection that recovers from a Bridge restart, stable identifiers based on the Message-ID, HTML to text conversion, filtering of the public key Proton attaches to every sent message, and a character budget so a single message cannot exhaust a context window.
 
-There is also a **local web interface**, on `127.0.0.1` only, running for as long as the server does:
+There is also a **local web interface**, on `127.0.0.1` only, running for as long as the server does. It is divided into sections, reached from a rail on the left:
 
-| It does | Notes |
+| Section | What is there |
 | :--- | :--- |
-| Signing in | Address and Bridge password go into the browser, never into a client configuration and never into a conversation |
-| Choosing where the password is kept | Four options, each with its cost stated: system keyring, encrypted file, this session only, plain file |
-| Unlocking an encrypted file | After a restart it asks for the master password alone, since the Bridge password is already on disk |
-| Showing the state | Connection, address, both Bridge ports, read-only mode, uptime, counters, and the pinned certificate |
-| Showing activity | What is running and for how long, plus the last 50 finished calls. Tool names and timings only, never arguments |
-| Changing the Bridge ports | Stored in `~/.config/proton-mcp/settings.json`. An explicit environment variable wins and the form disappears |
-| Testing the connection | Reports success as well as failure |
-| Listing folders and labels | On its own page, only when asked. They belong to the whole account, so a folder named after a bank gives that away on its own |
-| Signing out | Clears the credentials from every store at once |
+| Overview | Connection, address, where the password is kept, read-only mode, both Bridge ports, uptime and counters. State only: every control lives in the section it acts on |
+| Folders and labels | On its own page, only when asked. They belong to the whole account, so a folder named after a bank gives that away on its own |
+| Bridge | The ports, the pinned certificate, and a button that tries the connection. Ports are stored in `~/.config/proton-mcp/settings.json`; an explicit environment variable wins and the form disappears |
+| Credentials | Where the Bridge password is kept, and signing out, which clears it from every store at once |
+| Activity | What is running and for how long, plus the last 50 finished calls. Tool names and timings only, never arguments |
+
+Before signing in there are two more: the sign-in form, where the address and Bridge password go into the browser rather than into a client configuration or a conversation, with four places to keep the password and the cost of each stated; and the unlock page, which after a restart asks for the master password alone, since the Bridge password is already on disk.
+
+**None of it uses JavaScript.** The Content-Security-Policy forbids it, so navigation is links and anything interactive is a form control. It follows the system light or dark setting, which needs no script either.
 
 When a tool is called before anyone has signed in, the server does not ask for the password in the conversation. It returns the address of that page, and on clients that support URL elicitation it asks the client to open it directly.
 
