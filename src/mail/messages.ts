@@ -10,7 +10,7 @@
 import type { ImapFlow } from 'imapflow'
 import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
-import { resolveMessageId } from './ids.js'
+import { resolveMessageId, presentMessageId } from './ids.js'
 import { parseMessage, type ParsedMessage, type Address } from '../mime/parse.js'
 
 /** Upper bound for one listing. Deliberately low, callers can page. */
@@ -184,7 +184,9 @@ export async function fetchHeaders(client: ImapFlow, uids: number[]): Promise<Me
   )) {
     const env = msg.envelope
     byUid.set(msg.uid, {
-      messageId: env?.messageId ?? '',
+      // Through presentMessageId so that a listing names a message the same
+      // way reading it does. The envelope repeats the header as it stands.
+      messageId: presentMessageId(env?.messageId ?? ''),
       subject: env?.subject ?? '',
       from: toAddresses(env?.from),
       to: toAddresses(env?.to),
