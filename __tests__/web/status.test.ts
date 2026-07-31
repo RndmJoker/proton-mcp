@@ -28,7 +28,9 @@ let mailboxFailure: string | undefined
 let noticeDismissed: boolean
 let dismissals: number
 
-function build(options: { allowPorts?: boolean; allowDismiss?: boolean } = {}): WebInterface {
+function build(
+  options: { allowPorts?: boolean; allowDismiss?: boolean; dismissSticks?: boolean } = {},
+): WebInterface {
   return new WebInterface({
     port: 0,
     onSignIn: async () => undefined,
@@ -52,7 +54,9 @@ function build(options: { allowPorts?: boolean; allowDismiss?: boolean } = {}): 
           noticeDismissed: () => noticeDismissed,
           onDismissNotice: async () => {
             dismissals++
-            noticeDismissed = true
+            // Not sticking is a real state: it is what a settings file that
+            // cannot be written looks like from here.
+            if (options.dismissSticks !== false) noticeDismissed = true
           },
         }),
     onTest: async () => {
@@ -435,14 +439,24 @@ describe('the unofficial notice', () => {
     expect(res.body).toContain('href="/activity?token=' + token + '" aria-current="page"')
   })
 
-  it('falls back to the overview for a section that does not exist', async () => {
+  it('does not carry a section that does not exist back into the page', async () => {
+    // Measured on an interface where the dismissal does not stick, because
+    // that is the only state in which the notice comes back and its "from"
+    // field can be read. With a sticking dismissal the notice is gone and the
+    // switch in #render would land on the overview regardless, which would
+    // make this test agree with itself rather than check anything.
+    await web.stop()
+    web = build({ dismissSticks: false })
+    token = new URL(await web.start()).searchParams.get('token') ?? ''
+
     const page = await send(`/?token=${token}`)
     const res = await send(`/dismiss-notice?token=${token}`, {
       csrf: csrfFrom(page.body, '/dismiss-notice'),
       from: '../../etc/passwd',
     })
     expect(res.status).toBe(200)
-    expect(res.body).toContain(`href="/?token=${token}" aria-current="page"`)
+    expect(res.body).toContain('name="from" value="overview"')
+    expect(res.body).not.toContain('passwd')
   })
 
   it('needs a csrf token like every other write', async () => {
