@@ -252,3 +252,22 @@ export const UTF8_NOTE =
   '"\u00df"): the subject is encoded for transport and decoded again on arrival, and the body ' +
   'carries its character set, both verified against the Bridge. A transliterated message is ' +
   'simply a message with the wrong words in it.'
+
+/**
+ * Written into the description of every tool that takes a message body.
+ *
+ * Also measured rather than assumed. HTML placed in the body field is sent as
+ * `text/plain` and arrives as visible characters: the recipient reads
+ * `<b>Fett</b>`, tags and all. Nothing in the interface said so, and "the
+ * transport carries HTML" is true of the Bridge while being false of these
+ * tools, which is exactly the kind of gap a model falls into.
+ *
+ * The note says what to do instead, because a prohibition without an
+ * alternative is an invitation to try anyway.
+ */
+export const PLAIN_TEXT_NOTE =
+  'The body is plain text and markup is not interpreted. HTML written here is delivered as ' +
+  'visible characters, so the recipient would read the tags rather than see formatting. ' +
+  'Give a message its shape with line breaks, blank lines, indentation and plain lists, and ' +
+  'write a link as the bare address so that what is read is what is followed. Formatted ' +
+  'messages, with styled text and embedded images, are not supported yet.'
