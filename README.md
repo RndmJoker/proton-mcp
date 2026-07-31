@@ -2,7 +2,7 @@
 
 An MCP server for Proton Mail. It talks to a locally running Proton Mail Bridge and makes your mailbox available to AI assistants such as Claude.
 
-**Status: under construction.** Reading works and can be used, and so does signing in through the browser. Labels can be applied and removed. Nothing else can be written yet: no sending, no drafts, no moving between folders. See [Status](#status) for the details.
+**Status: under construction.** Reading works and can be used, and so does signing in through the browser. Labels, moving between folders, read state, trash and drafts all work. Sending does not exist yet, so nothing this server does can leave your machine. See [Status](#status) for the details.
 
 ## Why everything runs locally
 
@@ -26,6 +26,11 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `move_messages` | Moves messages into a folder. Labels survive the move |
 | `set_flags` | Marks read or unread and sets or clears the star |
 | `trash_messages` | Moves messages to the trash, which is what deletion means here |
+| `create_draft` | Writes a draft. Nothing is sent |
+| `update_draft` | Replaces a draft, keeping its id |
+| `reply_draft` | Prepares a reply as a draft, with the original quoted |
+| `forward_draft` | Prepares a forward as a draft, attachments and all |
+| `list_drafts` | The drafts, newest first |
 
 Underneath: a held IMAP connection that recovers from a Bridge restart, stable identifiers based on the Message-ID, HTML to text conversion, filtering of the public key Proton attaches to every sent message, and a character budget so a single message cannot exhaust a context window.
 
@@ -52,8 +57,7 @@ This table says what the server cannot do today. The issue behind each entry say
 | Missing | Tracked in |
 | :--- | :--- |
 | Sending, replying and forwarding, with the mandatory confirmation | [#4](https://github.com/RndmJoker/proton-mcp/issues/4) |
-| Drafts | [#3](https://github.com/RndmJoker/proton-mcp/issues/3) |
-| Moving messages, read state, trash | [#5](https://github.com/RndmJoker/proton-mcp/issues/5) |
+| Attachments composed from files on this machine | not tracked yet, see the note under Writing to your mailbox |
 | Publication on npm, so installation via `npx` | [#7](https://github.com/RndmJoker/proton-mcp/issues/7) |
 | A single prompt that sets a client up on its own | [#8](https://github.com/RndmJoker/proton-mcp/issues/8) |
 
@@ -202,6 +206,10 @@ Every tool that changes something is bounded on purpose:
 - **Labels are never created**, only applied. Create them in Proton itself.
 - **A label is not a destination for `move_messages`.** Moving a message into a label was measured to apply the label and leave the message where it is, so the tool refuses it instead of reporting a move that did not happen.
 - **A batch touches at most 50 messages**, and every one of them is accounted for in the answer, including the ones that failed and why.
+
+**A draft is the safe default.** The assistant prepares, you decide. Drafts are plain text, because Proton drops the plain text part of a message that also carries HTML and the recipient would then see something other than what was written. Attachments from files on this machine are deliberately not supported: a path named by a model, read by the server and carried out by the next confirmation is not a feature, it is a way out for anything on your disk. Forwarding loses nothing all the same, because the original message travels along whole.
+
+One thing worth knowing about drafts: Proton rewrites the thread headers of anything it stores. A reply is built with `In-Reply-To` and `References`, and what comes back has neither, only Proton's own internal thread id. Threading a stored draft is therefore Proton's business rather than this server's.
 
 Writes need a moment to settle. A move takes roughly fifteen seconds to reconcile with Proton, and until then the Bridge lists the message in both places, so the tools say so rather than reading back an intermediate state and calling it the result. Flags are the exception: those hold immediately.
 

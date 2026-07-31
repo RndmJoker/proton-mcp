@@ -32,6 +32,7 @@ import { registerMessageTools } from './tools/messages.js'
 import { registerInterfaceTool } from './tools/interface.js'
 import { registerLabelTools } from './tools/labels.js'
 import { registerActionTools } from './tools/actions.js'
+import { registerDraftTools } from './tools/drafts.js'
 import { setSignInHint } from './tools/failures.js'
 import { waitForIdle } from './in-flight.js'
 
@@ -263,6 +264,7 @@ async function main(): Promise<void> {
     // property of the configuration, and the tools should ask at call time.
     registerLabelTools(server, connection, () => config.readOnly)
     registerActionTools(server, connection, () => config.readOnly)
+    registerDraftTools(server, connection, () => config.readOnly, () => session.address)
     registerInterfaceTool(server, {
       url: () => web.url,
       running: () => web.running,

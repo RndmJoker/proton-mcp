@@ -40,6 +40,11 @@ export interface ParsedMessage {
   from: Address[]
   to: Address[]
   cc: Address[]
+  /**
+   * Only ever filled for a draft we wrote ourselves. A delivered message never
+   * carries the blind copies, which is the point of them.
+   */
+  bcc: Address[]
   replyTo: Address[]
   date: Date | undefined
   /** Readable text. Always filled when the message has any body at all. */
@@ -253,6 +258,7 @@ export async function parseMessage(
     from: addresses(parsed.from),
     to: addresses(parsed.to),
     cc: addresses(parsed.cc),
+    bcc: addresses(parsed.bcc),
     replyTo: addresses(parsed.replyTo),
     date: parsed.date,
     text: excerpt.text,
