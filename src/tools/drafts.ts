@@ -22,7 +22,7 @@ import {
   DRAFTS,
   type DraftResult,
 } from '../mail/drafts.js'
-import { describeRecipients } from '../mail/compose.js'
+import { describeRecipients, PLAIN_TEXT_NOTE, UTF8_NOTE } from '../mail/compose.js'
 import { BridgeError } from '../bridge/errors.js'
 import { formatList } from './format.js'
 import { describeFailure, withSignIn } from './failures.js'
@@ -98,7 +98,8 @@ export function registerDraftTools(
         'Writes a new draft into the Drafts mailbox. Nothing is sent. The draft is plain text: ' +
         'Proton drops the plain text part of a message that also carries HTML, so composing HTML ' +
         'would mean the recipient sees something other than what was written here. ' +
-        'Attachments from files on this machine are not supported on purpose.',
+        'Attachments from files on this machine are not supported on purpose. ' +
+        PLAIN_TEXT_NOTE + ' ' + UTF8_NOTE,
       inputSchema: z.object({
         to: addressList('The main recipients.'),
         cc: addressList('Recipients in copy, visible to everyone.'),
@@ -130,7 +131,8 @@ export function registerDraftTools(
       description:
         'Replaces a draft with a changed version, keeping the same id. Fields that are not given ' +
         'are carried over, including the blind copies, which drafts written here keep. Only ' +
-        'messages in the Drafts mailbox that carry the draft flag can be changed this way.',
+        'messages in the Drafts mailbox that carry the draft flag can be changed this way. ' +
+        PLAIN_TEXT_NOTE + ' ' + UTF8_NOTE,
       inputSchema: z.object({
         messageId: messageArgument,
         to: addressList('Replaces the main recipients.'),
@@ -171,7 +173,8 @@ export function registerDraftTools(
         'set one, otherwise its sender. The original is quoted below the new text. Nothing is sent. ' +
         'Note on threading: the reply is built with In-Reply-To and References, but Proton replaces ' +
         'those with its own internal thread id when it stores a draft, so a draft that is stored ' +
-        'and sent later carries Proton\'s idea of the conversation rather than ours.',
+        'and sent later carries Proton\'s idea of the conversation rather than ours. ' +
+        PLAIN_TEXT_NOTE + ' ' + UTF8_NOTE,
       inputSchema: z.object({
         messageId: messageArgument,
         text: z.string().describe('The reply itself. The original is quoted below it.'),
@@ -212,7 +215,8 @@ export function registerDraftTools(
       description:
         'Writes a forward of a message as a draft. The original is quoted below the new text, and ' +
         'when it carries attachments the whole original message is attached as well, so nothing of ' +
-        'it is lost. Nothing is sent.',
+        'it is lost. Nothing is sent. ' +
+        PLAIN_TEXT_NOTE + ' ' + UTF8_NOTE,
       inputSchema: z.object({
         messageId: messageArgument,
         to: z.array(z.string()).min(1).describe('Who to forward it to.'),

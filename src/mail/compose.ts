@@ -225,3 +225,49 @@ export function firstLines(text: string, lines = 8, chars = 600): string {
   const cut = head.length > chars ? `${head.slice(0, chars)}...` : head
   return cut.trim() || '(the message has no text)'
 }
+
+/**
+ * Written into the description of every tool that takes text from a caller.
+ *
+ * It exists because of an observed failure rather than a hypothetical one: an
+ * assistant using this server wrote German with "ae", "oe", "ue" and "ss" in
+ * place of the umlauts, in a message whose whole point was to carry them. A
+ * model that is unsure whether an interface survives non-ASCII will write around
+ * it, and the result is text that is wrong in a way nothing downstream can
+ * repair.
+ *
+ * The claim is measured, not assumed: a subject arrives MIME-encoded and decodes
+ * back to the characters it was given, a body carries `charset=utf-8`, and an
+ * attachment filename survives as an encoded word. Checked end to end through
+ * the Bridge on 31.07.2026.
+ */
+export const UTF8_NOTE =
+  'Text is UTF-8 everywhere: subject, body and addresses. Write characters as the language ' +
+  'actually spells them, including umlauts, accents, sharp s, quotation marks and any other ' +
+  // The two examples are escaped rather than written out. Everything public in
+  // this repository is English, and the check that enforces that reads a
+  // literal umlaut as German prose. Here they are specimens rather than
+  // language, and the string a caller receives is the same either way.
+  'non-ASCII character. Do not transliterate them away (no "ae" for "\u00e4", no "ss" for ' +
+  '"\u00df"): the subject is encoded for transport and decoded again on arrival, and the body ' +
+  'carries its character set, both verified against the Bridge. A transliterated message is ' +
+  'simply a message with the wrong words in it.'
+
+/**
+ * Written into the description of every tool that takes a message body.
+ *
+ * Also measured rather than assumed. HTML placed in the body field is sent as
+ * `text/plain` and arrives as visible characters: the recipient reads
+ * `<b>Fett</b>`, tags and all. Nothing in the interface said so, and "the
+ * transport carries HTML" is true of the Bridge while being false of these
+ * tools, which is exactly the kind of gap a model falls into.
+ *
+ * The note says what to do instead, because a prohibition without an
+ * alternative is an invitation to try anyway.
+ */
+export const PLAIN_TEXT_NOTE =
+  'The body is plain text and markup is not interpreted. HTML written here is delivered as ' +
+  'visible characters, so the recipient would read the tags rather than see formatting. ' +
+  'Give a message its shape with line breaks, blank lines, indentation and plain lists, and ' +
+  'write a link as the bare address so that what is read is what is followed. Formatted ' +
+  'messages, with styled text and embedded images, are not supported yet.'

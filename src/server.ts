@@ -37,6 +37,7 @@ import { registerDraftTools } from './tools/drafts.js'
 import { registerSendTools } from './tools/send.js'
 import type { PendingSend } from './tools/confirm.js'
 import { setSignInHint } from './tools/failures.js'
+import { setHandshakeCapabilities } from './tools/capabilities.js'
 import { waitForIdle } from './in-flight.js'
 
 // The version number lives in package.json only.
@@ -247,11 +248,20 @@ async function main(): Promise<void> {
     webUrl = await web.start()
     notify(`web interface at ${webUrl}`)
     if (!session.signedIn && !environmentCredentials) {
-      notify(
-        (await session.locked())
-          ? 'credentials are stored in an encrypted file, open the address above to unlock them'
-          : 'no credentials stored yet, open the address above to sign in',
-      )
+      // Asking the session restores from a store, which is what makes this
+      // message true. Without it the answer is always "nothing stored": the
+      // restore is lazy and has not happened yet at startup, so a perfectly
+      // good credentials file was reported as absent every single start.
+      const restored = await session.credentials()
+      if (restored) {
+        notify(`credentials restored from the ${session.storeKind ?? 'store'}, signed in as ${session.address}`)
+      } else {
+        notify(
+          (await session.locked())
+            ? 'credentials are stored in an encrypted file, open the address above to unlock them'
+            : 'no credentials stored yet, open the address above to sign in',
+        )
+      }
     }
   } catch (error) {
     // A web interface that cannot start must not stop the server: with
@@ -297,6 +307,12 @@ async function main(): Promise<void> {
     registerLabelTools(server, connection, () => config.readOnly)
     registerActionTools(server, connection, () => config.readOnly)
     registerDraftTools(server, connection, () => config.readOnly, () => session.address)
+    // What the client declared at handshake time. On this SDK's protocol
+    // revision it is the only place the declaration exists, and the confirmation
+    // before sending refuses when it cannot see one. Registered here because the
+    // instance is built here and does not exist earlier.
+    setHandshakeCapabilities(() => server.server?.getClientCapabilities?.())
+
     registerSendTools(server, {
       config,
       connection,
