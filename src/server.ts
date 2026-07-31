@@ -48,7 +48,18 @@ import { waitForIdle } from './in-flight.js'
 const require = createRequire(import.meta.url)
 const pkg = require('../package.json') as { name: string; version: string }
 
-const NAME = pkg.name
+/**
+ * What this server calls itself, which is deliberately not the package name.
+ *
+ * The package is scoped so that other servers can sit beside it under the same
+ * namespace. That scope is an ownership statement for a registry and has no
+ * business in a protocol handshake or at the front of every line on stderr,
+ * where it would only make both harder to read.
+ *
+ * Fixed here rather than derived, because deriving it would tie the name a
+ * client displays to a decision about where the package is published.
+ */
+const NAME = 'proton-mcp'
 const VERSION = pkg.version
 
 const notify = (message: string): void => {
