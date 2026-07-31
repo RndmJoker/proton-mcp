@@ -65,8 +65,9 @@ This table says what the server cannot do today. The issue behind each entry say
 | Missing | Tracked in |
 | :--- | :--- |
 | Attachments composed from files on this machine | [#17](https://github.com/RndmJoker/proton-mcp/issues/17) |
-| Publication on npm, so installation via `npx` | [#7](https://github.com/RndmJoker/proton-mcp/issues/7) |
-| A single prompt that sets a client up on its own | [#8](https://github.com/RndmJoker/proton-mcp/issues/8) |
+| Choosing per tool what an assistant may do | [#19](https://github.com/RndmJoker/proton-mcp/issues/19) |
+| Choosing how much markup a message may carry | [#24](https://github.com/RndmJoker/proton-mcp/issues/24) |
+| A fixed extra recipient the assistant cannot remove | [#18](https://github.com/RndmJoker/proton-mcp/issues/18) |
 
 **Binary attachments** are missing from that table on purpose. They are not an unfinished feature waiting for its turn: `get_attachment` refuses anything that is not text and says why. Handing one over would mean either base64 in the context window, which is unusable, or writing decrypted content to your disk, which this server does not do. Changing that needs a decision first, not an implementation, so there is nothing to track yet.
 
@@ -87,9 +88,50 @@ These limits come from the Bridge itself and cannot be worked around:
 - **Node.js 24 or newer.**
 - **The Bridge password**, which is not your Proton account password. The Bridge generates one per account. You find it in the Bridge application under the account, or in a terminal via `protonmail-bridge --cli` and then `info`.
 
-## Installing from this repository
+## Installing
 
-There is no published package on npm yet, so the server is built from source. A setup script does the work on either platform.
+### Hand it to your assistant
+
+If you already have an AI assistant with a shell, the shortest route is to let it do the work:
+
+```
+Fetch https://raw.githubusercontent.com/RndmJoker/proton-mcp/main/prompt.md and follow it
+```
+
+It checks the prerequisites, registers the server with your client and tells you what to do next. **It never asks for your Bridge password** and cannot: that goes into the local web interface, in your browser, and nowhere else.
+
+### From npm
+
+```bash
+npx @rndmjoker/proton-mcp
+```
+
+That is also the command to register with your client, so nothing has to be installed permanently. The published package carries provenance, so npm can show which commit and which workflow built it.
+
+To register it with Claude Code:
+
+```bash
+claude mcp add proton-mcp -- npx -y @rndmjoker/proton-mcp
+```
+
+For Claude Desktop, Cursor and anything else that reads a JSON file:
+
+```json
+{
+  "mcpServers": {
+    "proton-mcp": {
+      "command": "npx",
+      "args": ["-y", "@rndmjoker/proton-mcp"]
+    }
+  }
+}
+```
+
+Nothing else belongs in that entry. Credentials are not passed here, see [Signing in](#signing-in).
+
+### From this repository
+
+To run the current development state, or to change something. A setup script does the work on either platform.
 
 ### Linux and macOS
 

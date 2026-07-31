@@ -1,0 +1,87 @@
+name: Publish
+
+# Publishing to npm, triggered by a release rather than by a tag.
+#
+# The distinction is deliberate. Tags are created locally and signed, and a tag
+# can be pushed by accident or as part of an experiment. A release is a
+# separate, conscious act in the web interface, so nothing reaches a registry
+# that was not meant to.
+#
+# There is no NPM_TOKEN here and there is not meant to be one. A publish token
+# stored as a repository secret is a long-lived credential that can push a new
+# version of a package which reads people's mailboxes; anything that can read
+# repository secrets can then ship code to every installation. npm accepts
+# GitHub's OIDC identity instead, so the only thing that can publish is this
+# workflow, in this repository, and there is no secret to steal.
+#
+# **Trusted publishing has to be configured once on npmjs.com** for the package,
+# naming this repository and this workflow file. Renaming the file breaks the
+# link, and npm then refuses the publish rather than falling back to anything.
+
+on:
+  release:
+    types: [published]
+  # Available by hand as well, for a release that was published before the
+  # workflow existed. It cannot publish anything a release did not already
+  # describe: the version comes from the tree at the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to publish, for example v0.4.4
+        required: true
+
+permissions:
+  contents: read
+  # What lets npm verify who is publishing, and what replaces the token.
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The same three gates the CI applies to a pull request. A release is
+      # built from a commit that already passed them, but this job publishes
+      # from a tag rather than from that run, and re-checking costs a minute
+      # against shipping something nobody looked at.
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      # The version in the tree has to be the version the tag claims, or the
+      # published package would carry a number nobody released. npm would
+      # happily publish the mismatch.
+      - name: Check the version against the tag
+        run: |
+          tag="${{ inputs.tag || github.event.release.tag_name }}"
+          want="${tag#v}"
+          have="$(node -p "require('./package.json').version")"
+          if [ "$want" != "$have" ]; then
+            echo "::error::tag $tag expects version $want, package.json says $have"
+            exit 1
+          fi
+          echo "version $have matches tag $tag"
+
+      # --provenance attaches a signed statement of which commit and which
+      # workflow produced this tarball, which anyone can verify. For a package
+      # that handles credentials that is worth more than it costs.
+      - name: Publish
+        run: npm publish --provenance --access public
