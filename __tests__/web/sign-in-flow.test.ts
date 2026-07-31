@@ -256,14 +256,14 @@ describe('unlocking a stored encrypted file', () => {
     expect(res.body).toContain('/home/someone/.config/proton-mcp/credentials.enc')
   })
 
-  it('unlocks with the right password and lands on the status page', async () => {
+  it('unlocks with the right password and lands on the overview', async () => {
     const page = await send(`/?token=${token}`)
     const res = await send(`/unlock?token=${token}`, {
       csrf: csrfFrom(page.body, '/unlock'),
       master: 'my-master',
     })
     expect(unlocks).toEqual(['my-master'])
-    expect(res.body).toContain('Status')
+    expect(res.body).toContain('Overview')
     expect(res.body).toContain('someone@example.com')
   })
 
