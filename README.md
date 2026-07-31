@@ -60,7 +60,7 @@ This table says what the server cannot do today. The issue behind each entry say
 
 | Missing | Tracked in |
 | :--- | :--- |
-| Attachments composed from files on this machine | not tracked yet, see the note under Writing to your mailbox |
+| Attachments composed from files on this machine | [#17](https://github.com/RndmJoker/proton-mcp/issues/17) |
 | Publication on npm, so installation via `npx` | [#7](https://github.com/RndmJoker/proton-mcp/issues/7) |
 | A single prompt that sets a client up on its own | [#8](https://github.com/RndmJoker/proton-mcp/issues/8) |
 
