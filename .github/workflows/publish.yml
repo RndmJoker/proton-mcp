@@ -80,8 +80,30 @@ jobs:
           fi
           echo "version $have matches tag $tag"
 
+      # Which dist-tag this version answers to.
+      #
+      # npm sets `latest` on every publish unless told otherwise, prereleases
+      # included. So publishing 0.5.0-beta.0 without thinking about it would
+      # make a beta the version everyone installs, silently, until the next
+      # stable release pushed it back. Docker makes you push `latest`
+      # deliberately; npm assumes it.
+      #
+      # A semver prerelease is exactly "has a hyphen after the patch number",
+      # so that is what decides. 0.4.4 goes to latest, 0.5.0-beta.0 goes to
+      # next, and nobody installing normally sees the beta.
+      - name: Decide the dist-tag
+        id: disttag
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          case "$version" in
+            *-*) tag=next ;;
+            *)   tag=latest ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publishing $version as $tag"
+
       # --provenance attaches a signed statement of which commit and which
       # workflow produced this tarball, which anyone can verify. For a package
       # that handles credentials that is worth more than it costs.
       - name: Publish
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag ${{ steps.disttag.outputs.tag }}
