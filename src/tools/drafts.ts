@@ -202,11 +202,20 @@ export function registerDraftTools(
           .boolean()
           .default(false)
           .describe('When true, the other recipients of the original are put in copy.'),
+        html: z
+          .string()
+          .optional()
+          .describe(
+            'Your part of the message as markup instead of plain text. The original is quoted ' +
+              'below it either way. The quote is always built from the original\'s text, never ' +
+              'from its own markup, so a message full of markup this server would not send can ' +
+              'still be replied to or forwarded.',
+          ),
         mailbox: z.string().optional().describe('The mailbox the original is in, if known.'),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ messageId, text, replyAll, mailbox }, ctx) =>
+    async ({ messageId, text, replyAll, mailbox, html }, ctx) =>
       track(
         () =>
           withSignIn(ctx, async () => {
@@ -217,7 +226,7 @@ export function registerDraftTools(
                 requireFrom(from),
                 messageId,
                 text,
-                { all: replyAll, ...(mailbox ? { mailbox } : {}) },
+                { all: replyAll, ...(mailbox ? { mailbox } : {}), ...(html !== undefined ? { html } : {}) },
               )
               return ok(describeDraft(draft, 'Reply written'))
             } catch (error) {
@@ -241,11 +250,20 @@ export function registerDraftTools(
         messageId: messageArgument,
         to: z.array(z.string()).min(1).describe('Who to forward it to.'),
         text: z.string().default('').describe('Anything to say above the forwarded message.'),
+        html: z
+          .string()
+          .optional()
+          .describe(
+            'Your part of the message as markup instead of plain text. The original is quoted ' +
+              'below it either way. The quote is always built from the original\'s text, never ' +
+              'from its own markup, so a message full of markup this server would not send can ' +
+              'still be replied to or forwarded.',
+          ),
         mailbox: z.string().optional().describe('The mailbox the original is in, if known.'),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ messageId, to, text, mailbox }, ctx) =>
+    async ({ messageId, to, text, mailbox, html }, ctx) =>
       track(
         () =>
           withSignIn(ctx, async () => {
@@ -257,7 +275,7 @@ export function registerDraftTools(
                 messageId,
                 to,
                 text,
-                mailbox ? { mailbox } : {},
+                { ...(mailbox ? { mailbox } : {}), ...(html !== undefined ? { html } : {}) },
               )
               return ok(describeDraft(draft, 'Forward written'))
             } catch (error) {

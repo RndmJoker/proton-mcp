@@ -246,6 +246,54 @@ export function quote(
   return `\n\nOn ${when}, ${who || 'someone'} wrote:\n${quoted}`
 }
 
+/** Turns text into markup that says exactly what the text said. */
+export function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/**
+ * Quotes a message inside a formatted reply.
+ *
+ * **The quote is built from the original's text, never from its markup**, and
+ * that is the whole design rather than a shortcut. Two reasons, and the second
+ * is the one that matters:
+ *
+ * 1. Carrying the original's markup would mean checking a stranger's HTML
+ *    against the permitted set and refusing the reply when it fails. Ordinary
+ *    mail is full of `<style>` blocks, so replying to real messages would
+ *    mostly not work.
+ * 2. It would put markup written by somebody else into a message sent under
+ *    this account's name. A link in the quote could show one thing and go
+ *    somewhere else, and it would ride along into the reply without anybody
+ *    having written it.
+ *
+ * The text comes from the same conversion this server uses to read a message,
+ * so a link in the original appears as its address in the quote. A phishing
+ * mail quoted in a reply arrives with its targets in plain sight. It is then
+ * escaped, because text that happens to contain angle brackets must stay text.
+ */
+export function quoteAsHtml(
+  original: { from: Recipient[]; date: Date | undefined; text: string },
+  limit = 4000,
+): string {
+  const who = original.from.map(showRecipient).join(', ') || 'someone'
+  const when = original.date
+    ? original.date.toISOString().slice(0, 16).replace('T', ' ')
+    : 'an unknown date'
+  const body = original.text.length > limit ? `${original.text.slice(0, limit)}\n[...]` : original.text
+
+  const lines = escapeHtml(body).split('\n').join('<br>')
+  return (
+    `<p>On ${escapeHtml(when)}, ${escapeHtml(who)} wrote:</p>` +
+    `<blockquote style="margin:0 0 0 12px; padding-left:12px; border-left:3px solid #cccccc; color:#555555">` +
+    `${lines}</blockquote>`
+  )
+}
+
 /** One address as a person reads it. */
 export function showRecipient(r: Recipient): string {
   return r.name ? `${r.name} <${r.address}>` : r.address
