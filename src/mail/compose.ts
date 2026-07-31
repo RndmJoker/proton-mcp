@@ -15,7 +15,8 @@
 import MailComposer from 'nodemailer/lib/mail-composer/index.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { BridgeError } from '../bridge/errors.js'
-import { assertSendableMarkup, type MarkupUrl } from './markup.js'
+import { assertSendableMarkup, readMarkup, type MarkupUrl } from './markup.js'
+import { prepareQuotedMarkup } from './quote.js'
 import { htmlToText } from '../mime/parse.js'
 
 /** An address, optionally with a display name. */
@@ -53,6 +54,18 @@ export interface Draft {
    * mean the recipient never sees the part that was confirmed.
    */
   html?: string
+  /**
+   * The quoted original, already prepared, kept apart from `html` on purpose.
+   *
+   * The separation is the boundary itself rather than a convenience. What the
+   * writer composed goes through the permitted set, because it is written under
+   * this account's name and a person is answering for it. What is quoted does
+   * not, because it is a message that already arrived and cutting it down to
+   * what this server would write itself was measured to need a median of 87
+   * removals, which demolishes it. quote.ts drops the elements that would reach
+   * out of the quote, and nothing else.
+   */
+  quotedHtml?: string
   /** Files referenced from the markup by content id. */
   inlineParts?: InlinePart[]
 }
@@ -177,7 +190,9 @@ export async function buildMessage(
           'was given. Either provide the file or point the image at a full address instead.',
       )
     }
-    fields.html = draft.html
+    // Only the composed part is checked. The quote is appended afterwards,
+    // already prepared, and deliberately not held to the same list.
+    fields.html = draft.html + (draft.quotedHtml ?? '')
   }
   if (draft.cc.length) fields.cc = draft.cc
   if (draft.bcc.length) fields.bcc = draft.bcc
@@ -246,6 +261,15 @@ export function quote(
   return `\n\nOn ${when}, ${who || 'someone'} wrote:\n${quoted}`
 }
 
+/** Who wrote the quoted message and when, escaped because both are foreign. */
+function quoteHeader(original: { from: Recipient[]; date: Date | undefined }): string {
+  const who = original.from.map(showRecipient).join(', ') || 'someone'
+  const when = original.date
+    ? original.date.toISOString().slice(0, 16).replace('T', ' ')
+    : 'an unknown date'
+  return `On ${escapeHtml(when)}, ${escapeHtml(who)} wrote:`
+}
+
 /** Turns text into markup that says exactly what the text said. */
 export function escapeHtml(text: string): string {
   return text
@@ -276,22 +300,42 @@ export function escapeHtml(text: string): string {
  * mail quoted in a reply arrives with its targets in plain sight. It is then
  * escaped, because text that happens to contain angle brackets must stay text.
  */
-export function quoteAsHtml(
-  original: { from: Recipient[]; date: Date | undefined; text: string },
+/**
+ * The quoted body alone, without the "wrote:" line.
+ *
+ * A forward writes its own header, so it needs the body on its own. The two
+ * paths share this rather than each preparing the original, which is how they
+ * would come to differ in what they let through.
+ */
+export function quoteBody(
+  original: { from: Recipient[]; date: Date | undefined; text: string; html?: string },
   limit = 4000,
 ): string {
-  const who = original.from.map(showRecipient).join(', ') || 'someone'
-  const when = original.date
-    ? original.date.toISOString().slice(0, 16).replace('T', ' ')
-    : 'an unknown date'
+  if (original.html) {
+    const prepared = prepareQuotedMarkup(original.html)
+    if (prepared.html) {
+      return (
+        `<blockquote style="margin:0 0 0 12px; padding-left:12px; border-left:3px solid #cccccc">` +
+        `${prepared.html}</blockquote>`
+      )
+    }
+  }
   const body = original.text.length > limit ? `${original.text.slice(0, limit)}\n[...]` : original.text
-
-  const lines = escapeHtml(body).split('\n').join('<br>')
   return (
-    `<p>On ${escapeHtml(when)}, ${escapeHtml(who)} wrote:</p>` +
     `<blockquote style="margin:0 0 0 12px; padding-left:12px; border-left:3px solid #cccccc; color:#555555">` +
-    `${lines}</blockquote>`
+    `${escapeHtml(body).split('\n').join('<br>')}</blockquote>`
   )
+}
+
+export function quoteAsHtml(
+  original: { from: Recipient[]; date: Date | undefined; text: string; html?: string },
+  limit = 4000,
+): string {
+  // When the original was formatted, it is quoted as it was written. Only the
+  // document-level elements are dropped, because those would apply to the reply
+  // above the quote rather than to the quote. The reasoning and the numbers
+  // behind it are in quote.ts.
+  return `<p>${quoteHeader(original)}</p>${quoteBody(original, limit)}`
 }
 
 /** One address as a person reads it. */
@@ -393,7 +437,49 @@ export const PLAIN_TEXT_NOTE =
  * to, and that is exactly the difference a person confirming a send has to see.
  */
 export function readableBody(draft: Draft): string {
+  return draft.html === undefined
+    ? draft.text
+    : htmlToText(draft.html + (draft.quotedHtml ?? ''))
+}
+
+/**
+ * The part the sender wrote, without the quote.
+ *
+ * What a confirmation shows as the body. Mixing the quote into the excerpt
+ * would mean a person reads eight lines of a message they already received
+ * instead of the message they are about to send, and the excerpt is cut long
+ * before their own words appear.
+ */
+export function composedBody(draft: Draft): string {
   return draft.html === undefined ? draft.text : htmlToText(draft.html)
+}
+
+/** What the quote points at, counted rather than listed. */
+export interface QuoteSummary {
+  links: number
+  images: number
+  /** Text a recipient can read that the readable body leaves out. */
+  hiddenText: string[]
+}
+
+/**
+ * The quote, summarised for the confirmation.
+ *
+ * Counted rather than listed, and that is a judgement worth stating. The
+ * composed part's addresses are shown in full because the sender is answering
+ * for them. A quoted newsletter carries dozens, measured: four images per
+ * message on average and up to thirty links. Listing those would bury the two
+ * addresses that matter under thirty that arrived in the sender's mailbox
+ * anyway, and a confirmation nobody reads to the end protects nobody.
+ */
+export function summariseQuote(draft: Draft): QuoteSummary | undefined {
+  if (!draft.quotedHtml) return undefined
+  const reading = readMarkup(draft.quotedHtml)
+  return {
+    links: reading.urls.filter((u) => u.kind === 'link').length,
+    images: reading.urls.filter((u) => u.kind === 'image').length,
+    hiddenText: reading.hiddenText,
+  }
 }
 
 /**

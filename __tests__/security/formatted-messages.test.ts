@@ -201,3 +201,33 @@ describe('helpers agree with each other', () => {
     expect(hiddenTextOf(draft())).toEqual([])
   })
 })
+
+describe('a quoted message in the confirmation', () => {
+  it('is named and counted rather than listed', () => {
+    // Measured on a real mailbox: four images per message on average. Listing a
+    // quote's addresses would bury the ones the sender is answering for.
+    const draft = withHtml('<p>My answer.</p>', {
+      quotedHtml:
+        '<blockquote><a href="https://a.invalid">one</a><a href="https://b.invalid">two</a>' +
+        '<img src="https://c.invalid/p.png"></blockquote>',
+    })
+    const shown = describeForConfirmation(draft, 'This reply')
+    expect(shown).toContain('2 link(s) and 1 image(s)')
+    expect(shown).not.toContain('https://a.invalid')
+  })
+
+  it('still shows every address of the part that was written', () => {
+    const draft = withHtml('<p><a href="https://mine.invalid">mine</a></p>', {
+      quotedHtml: '<blockquote><a href="https://theirs.invalid">theirs</a></blockquote>',
+    })
+    const shown = describeForConfirmation(draft, 'This reply')
+    expect(shown).toContain('https://mine.invalid')
+    expect(shown).not.toContain('https://theirs.invalid')
+  })
+
+  it('is covered by the digest, because it is part of what goes out', () => {
+    const one = withHtml('<p>x</p>', { quotedHtml: '<blockquote>first</blockquote>' })
+    const two = withHtml('<p>x</p>', { quotedHtml: '<blockquote>second</blockquote>' })
+    expect(digestOf(two)).not.toBe(digestOf(one))
+  })
+})

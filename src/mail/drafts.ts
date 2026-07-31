@@ -54,6 +54,7 @@ import {
   prefixSubject,
   quote,
   quoteAsHtml,
+  quoteBody,
   type Draft,
   type Recipient,
 } from './compose.js'
@@ -317,11 +318,11 @@ function markupOf(
 function composeWithQuote(
   text: string,
   html: string | undefined,
-  original: { from: Recipient[]; date: Date | undefined; subject: string; text: string },
-): { text: string; html?: string } {
+  original: { from: Recipient[]; date: Date | undefined; subject: string; text: string; html?: string },
+): { text: string; html?: string; quotedHtml?: string } {
   if (html === undefined) return { text: `${text}${quote(original)}` }
-  const full = `${html}${quoteAsHtml(original)}`
-  return { text: htmlToText(full), html: full }
+  const quoted = quoteAsHtml(original)
+  return { text: htmlToText(html + quoted), html, quotedHtml: quoted }
 }
 
 /** The thread headers of a message, which a reply has to carry on. */
@@ -493,16 +494,20 @@ export async function buildForwardDraft(
     ...(options.html === undefined
       ? { text: `${text}\n${header}${original.text}` }
       : (() => {
-          const quoted =
-            `<p>---------- Forwarded message ----------</p>` +
-            `<p>From: ${escapeHtml(original.from.map((f) => (f.name ? `${f.name} <${f.address}>` : f.address)).join(', '))}<br>` +
+          const head =
+            `<p>---------- Forwarded message ----------<br>` +
+            `From: ${escapeHtml(original.from.map((f) => (f.name ? `${f.name} <${f.address}>` : f.address)).join(', '))}<br>` +
             `Date: ${escapeHtml(original.date ? original.date.toISOString().slice(0, 16).replace('T', ' ') : 'unknown')}<br>` +
             `Subject: ${escapeHtml(original.subject || '(no subject)')}<br>` +
-            `To: ${escapeHtml(original.to.map((t) => t.address).join(', ') || '(none)')}</p>` +
-            `<blockquote style="margin:0 0 0 12px; padding-left:12px; border-left:3px solid #cccccc; color:#555555">` +
-            `${escapeHtml(original.text).split('\n').join('<br>')}</blockquote>`
-          const html = `${options.html}${quoted}`
-          return { text: htmlToText(html), html }
+            `To: ${escapeHtml(original.to.map((t) => t.address).join(', ') || '(none)')}</p>`
+          // The same preparation as a reply: the original as it was, minus what
+          // would reach out of the quote.
+          const quoted = head + quoteBody(original)
+          return {
+            text: htmlToText(options.html + quoted),
+            html: options.html,
+            quotedHtml: quoted,
+          }
         })()),
     messageId: mintMessageId(from.address),
   }

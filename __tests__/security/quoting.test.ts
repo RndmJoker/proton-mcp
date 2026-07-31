@@ -7,15 +7,26 @@ import type { Connection, MailboxStatus } from '../../src/bridge/connection.js'
 /**
  * Quoting a stranger's message inside one of our own.
  *
- * This is the sharpest edge in formatted mail, and it is easy to miss. A reply
- * carries the original along, so whatever the original was made of would end up
- * inside a message sent under this account's name. If that were its markup, two
- * bad things follow: replying to ordinary mail would fail, because real mail is
- * full of elements this server refuses to send, and a link in the quote could
- * show one thing and go somewhere else without anybody having written it.
+ * The quote keeps the original as it was written, which is what a reply is
+ * expected to look like and what was decided after measuring: 94 percent of
+ * real mail is formatted, and cutting a quote down to what this server writes
+ * itself needed a median of 87 removals per message, which demolishes it.
  *
- * So the quote is built from the original's **text**, always, and escaped. These
- * tests are what makes that a property rather than an intention.
+ * So the boundary is not between our markup and theirs. It is between markup
+ * that stays inside the quote and markup that reaches out of it:
+ *
+ * - **The composed part is held to the permitted set**, because it is written
+ *   under this account's name and a person answers for it.
+ * - **The quote keeps everything except document-level elements.** A `<style>`
+ *   block applies to the whole message, so inside a quote it restyles the reply
+ *   above it. Measured: 66 percent of formatted mail carries one and 56 percent
+ *   of those aim at bare elements, `blockquote` among them.
+ * - **A quoted plain text original is still escaped**, or text that happens to
+ *   contain angle brackets would become markup.
+ *
+ * What is deliberately no longer true: a link in the quote is a link again,
+ * with whatever target it always had. That is what quoting a message means, and
+ * it is the same in every mail client.
  */
 
 const ME = 'me@example.com'
@@ -75,8 +86,8 @@ function fakeConnection(source: string) {
 
 describe('replying to a message this server would refuse to send', () => {
   it('works, rather than refusing because the original was not to our taste', async () => {
-    // Real mail is full of style blocks. If quoting carried the original's
-    // markup, replying to most messages would simply fail.
+    // Real mail is full of elements this server would not write. Holding a
+    // quote to that list would make replying to most messages impossible.
     const draft = await buildReplyDraft(
       fakeConnection(HOSTILE),
       ME,
@@ -85,7 +96,7 @@ describe('replying to a message this server would refuse to send', () => {
       { html: '<p>My answer.</p>' },
     )
     expect(draft.html).toBeDefined()
-    expect(readMarkup(draft.html!).problems).toEqual([])
+    expect(draft.quotedHtml).toBeDefined()
   })
 
   it('carries none of the original markup into the reply', async () => {
@@ -96,15 +107,16 @@ describe('replying to a message this server would refuse to send', () => {
       'x',
       { html: '<p>My answer.</p>' },
     )
-    const html = draft.html ?? ''
-    for (const forbidden of ['<script', '<style', 'onclick=', 'display:none']) {
-      expect(html).not.toContain(forbidden)
-    }
+    // Only the ones that would act outside the quote. An onclick or an inline
+    // display:none stays inside the element it sits on, and no mail client runs
+    // a handler, so those ride along the way every other client quotes them.
+    const quoted = draft.quotedHtml ?? ''
+    expect(quoted).not.toContain('<script')
+    expect(quoted).not.toContain('<style')
+    expect(quoted).not.toContain('generated')
   })
 
-  it('keeps the original readable, with its link targets in plain sight', async () => {
-    // A phishing message quoted in a reply arrives with its addresses visible,
-    // because the quote comes from the same conversion used to read mail.
+  it('keeps the original as it was written, formatting and all', async () => {
     const draft = await buildReplyDraft(
       fakeConnection(HOSTILE),
       ME,
@@ -112,13 +124,14 @@ describe('replying to a message this server would refuse to send', () => {
       'x',
       { html: '<p>My answer.</p>' },
     )
-    expect(draft.html).toContain('Ordinary looking text.')
-    expect(draft.html).toContain('phishing.invalid/pay')
+    expect(draft.quotedHtml).toContain('Ordinary looking text.')
+    // The link is a link again, with its own target. That is what a quote is.
+    expect(draft.quotedHtml).toContain('href="https://phishing.invalid/pay"')
   })
 
-  it('turns the original into text rather than into markup, even for the addresses', async () => {
-    // The addresses of the original appear as characters in the quote, not as
-    // links, so nothing in a quote is clickable that the sender did not write.
+  it('keeps the composed part and the quote apart', async () => {
+    // The separation is the boundary. What was written goes through the
+    // permitted set; what is quoted does not, and could not.
     const draft = await buildReplyDraft(
       fakeConnection(HOSTILE),
       ME,
@@ -126,8 +139,9 @@ describe('replying to a message this server would refuse to send', () => {
       'x',
       { html: '<p>My answer.</p>' },
     )
-    const urls = readMarkup(draft.html ?? '').urls
-    expect(urls.map((u) => u.url)).not.toContain('https://phishing.invalid/pay')
+    expect(draft.html).toBe('<p>My answer.</p>')
+    expect(readMarkup(draft.html ?? '').problems).toEqual([])
+    expect(draft.quotedHtml).not.toContain('My answer')
   })
 })
 
@@ -146,8 +160,7 @@ describe('escaping', () => {
       'x',
       { html: '<p>Answer.</p>' },
     )
-    expect(draft.html).toContain('&lt;script&gt;')
-    expect(readMarkup(draft.html ?? '').problems).toEqual([])
+    expect(draft.quotedHtml).toContain('&lt;script&gt;')
   })
 
   it('escapes the sender name as well, which is also foreign text', () => {
@@ -171,7 +184,9 @@ describe('escaping', () => {
 })
 
 describe('forwarding', () => {
-  it('quotes the original as text inside a formatted forward', async () => {
+  it('quotes the original the same way a reply does', async () => {
+    // The two share one preparation. Two of them would come to differ in what
+    // they let through, and the difference would be nobody's decision.
     const draft = await buildForwardDraft(
       fakeConnection(HOSTILE),
       ME,
@@ -180,9 +195,11 @@ describe('forwarding', () => {
       '',
       { html: '<p>For your information.</p>' },
     )
-    expect(draft.html).toContain('Forwarded message')
-    expect(draft.html).not.toContain('<script')
-    expect(readMarkup(draft.html ?? '').problems).toEqual([])
+    expect(draft.quotedHtml).toContain('Forwarded message')
+    expect(draft.quotedHtml).toContain('Ordinary looking text.')
+    expect(draft.quotedHtml).not.toContain('<script')
+    expect(draft.quotedHtml).not.toContain('<style')
+    expect(draft.html).toBe('<p>For your information.</p>')
   })
 
   it('still works without markup, exactly as before', async () => {

@@ -45,8 +45,9 @@ import {
   fingerprintPart,
   firstLines,
   hiddenTextOf,
-  readableBody,
+  composedBody,
   showRecipient,
+  summariseQuote,
   type Draft,
 } from '../mail/compose.js'
 import { canElicitForm } from './capabilities.js'
@@ -89,6 +90,8 @@ export function digestOf(draft: Draft): string {
     // read identically and differ in every link target, which is the whole
     // reason formatted mail needs a confirmation at all.
     html: draft.html ?? null,
+    // The quote is part of what goes out, so it is part of what was agreed to.
+    quoted: draft.quotedHtml ?? null,
     inReplyTo: draft.inReplyTo ?? null,
     attached: draft.attachedMessage?.filename ?? null,
     // The contents of every carried file, not just its name. A confirmation
@@ -127,8 +130,24 @@ export function describeForConfirmation(draft: Draft, what: string): string {
     `Subject: ${draft.subject || '(no subject)'}`,
     '',
     'The message begins:',
-    firstLines(readableBody(draft)),
+    firstLines(composedBody(draft)),
   ]
+
+  // A quoted message is named rather than listed. Measured on a real mailbox:
+  // four images per message on average and up to thirty links. Listing those
+  // would bury the two addresses the sender is answering for under thirty that
+  // arrived in their mailbox anyway, and a confirmation nobody reads to the end
+  // protects nobody.
+  const quoted = summariseQuote(draft)
+  if (quoted) {
+    lines.push(
+      '',
+      `Below that, the message being answered is quoted as it was written, with ` +
+        `${quoted.links} link(s) and ${quoted.images} image(s) of its own. Those are not listed ` +
+        'here: they arrived in your mailbox already, and the addresses shown below are the ones ' +
+        'this message adds.',
+    )
+  }
 
   // Everything below is shown in full and never shortened. The excerpt above
   // stops after a few lines, and an address on line thirty is exactly where one
@@ -151,6 +170,10 @@ export function describeForConfirmation(draft: Draft, what: string): string {
   if (hidden.length) {
     lines.push('', 'Text a recipient can read that is not in the body above:')
     for (const entry of hidden) lines.push(`  ${entry}`)
+  }
+
+  if (quoted?.hiddenText.length) {
+    lines.push('', `The quoted message also carries ${quoted.hiddenText.length} alt text(s) or titles.`)
   }
 
   const files = describeAttachments(draft)
