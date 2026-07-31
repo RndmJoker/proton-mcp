@@ -125,57 +125,77 @@ function csrfFrom(body: string, action: string): string {
 }
 
 describe('choosing where the password is kept', () => {
-  it('shows which option is selected', async () => {
-    const first = await send(`/?token=${token}`)
-    // Nothing chosen yet: the suggestion is marked as selected so the form
-    // never claims a destination the user did not see.
-    expect(first.body).toContain('Will be kept in:')
-
-    const chosen = await send(`/choose-store?token=${token}`, {
-      csrf: csrfFrom(first.body, '/choose-store'),
-      kind: 'plain-file',
-    })
-    expect(chosen.status).toBe(200)
-    expect(chosen.body).toContain('selected')
-    expect(chosen.body).toContain('Plain file')
+  it('offers every option as a radio in the one form', async () => {
+    // Choosing used to post and re-render. Everything now travels with the
+    // credentials, so picking an option costs no round trip at all.
+    const { body } = await send(`/?token=${token}`)
+    for (const kind of ['keyring', 'encrypted-file', 'session', 'plain-file']) {
+      expect(body).toContain(`name="store" id="store-${kind}" value="${kind}"`)
+    }
+    expect(body).not.toContain('/choose-store')
   })
 
-  it('asks for a master password once the encrypted file is chosen', async () => {
-    const first = await send(`/?token=${token}`)
-    const chosen = await send(`/choose-store?token=${token}`, {
-      csrf: csrfFrom(first.body, '/choose-store'),
-      kind: 'encrypted-file',
-    })
-    // The field that was missing entirely, which made this option unusable.
-    expect(chosen.body).toContain('name="master"')
-    expect(chosen.body).toContain('name="masterRepeat"')
-    expect(chosen.body).toContain('if you forget it')
+  it('preselects exactly one option', async () => {
+    // Which one depends on the machine, because listStores probes the real
+    // keyring here. That exactly one radio is checked does not: a form with
+    // none checked would submit no store at all, and one with two is invalid.
+    const { body } = await send(`/?token=${token}`)
+    const checked = body.match(/<input type="radio"[^>]*\schecked/g) ?? []
+    expect(checked).toHaveLength(1)
   })
 
-  it('does not ask for a master password for the other stores', async () => {
+  it('carries the master password fields for every option', async () => {
+    // In the document always, shown by CSS for the one store that uses them.
+    // Rendering them only for that store is what forced the reload.
+    const { body } = await send(`/?token=${token}`)
+    expect(body).toContain('name="master"')
+    expect(body).toContain('name="masterRepeat"')
+    expect(body).toContain('if you forget it')
+    expect(body).toContain('class="master-fields"')
+  })
+
+  it('carries the plain file warning, closable and not a refusal', async () => {
+    const { body } = await send(`/?token=${token}`)
+    expect(body).toContain('class="warning-layer"')
+    expect(body).toContain('The password will be readable')
+    expect(body).toContain('for="warning-seen"')
+    // The option itself stays selectable: the warning informs, it does not veto.
+    expect(body).not.toContain('id="store-plain-file" value="plain-file" disabled')
+  })
+
+  it('refuses an option that does not exist', async () => {
+    // The choice is form input now, so a name nobody offered is ordinary
+    // untrusted data. It falls back to the recommendation rather than being
+    // handed to the session.
     const first = await send(`/?token=${token}`)
-    const chosen = await send(`/choose-store?token=${token}`, {
-      csrf: csrfFrom(first.body, '/choose-store'),
-      kind: 'session',
+    const res = await send(`/sign-in?token=${token}`, {
+      csrf: csrfFrom(first.body, '/sign-in'),
+      store: 'somewhere-else',
+      address: 'someone@example.com',
+      password: 'bridge-password',
+      // Supplied so the encrypted file is not turned away for a missing one;
+      // which store gets recommended depends on the machine.
+      master: 'my-master',
+      masterRepeat: 'my-master',
     })
-    expect(chosen.body).not.toContain('name="master"')
+    expect(res.status).toBe(200)
+    expect(signIns).toHaveLength(1)
+    expect(['keyring', 'encrypted-file', 'session', 'plain-file']).toContain(signIns[0]?.store)
+    expect(signIns[0]?.user).toBe('someone@example.com')
   })
 })
 
 describe('signing in with an encrypted file', () => {
   async function chooseEncrypted(): Promise<string> {
     const first = await send(`/?token=${token}`)
-    const chosen = await send(`/choose-store?token=${token}`, {
-      csrf: csrfFrom(first.body, '/choose-store'),
-      kind: 'encrypted-file',
-    })
-    return csrfFrom(chosen.body, '/sign-in')
+    return csrfFrom(first.body, '/sign-in')
   }
 
   it('passes the master password through', async () => {
     const signInCsrf = await chooseEncrypted()
     const res = await send(`/sign-in?token=${token}`, {
       csrf: signInCsrf,
+      store: 'encrypted-file',
       address: 'someone@example.com',
       password: 'bridge-password',
       master: 'my-master',
@@ -196,6 +216,7 @@ describe('signing in with an encrypted file', () => {
     const signInCsrf = await chooseEncrypted()
     const res = await send(`/sign-in?token=${token}`, {
       csrf: signInCsrf,
+      store: 'encrypted-file',
       address: 'someone@example.com',
       password: 'bridge-password',
       master: 'my-master',
@@ -211,6 +232,7 @@ describe('signing in with an encrypted file', () => {
     const signInCsrf = await chooseEncrypted()
     const res = await send(`/sign-in?token=${token}`, {
       csrf: signInCsrf,
+      store: 'encrypted-file',
       address: 'someone@example.com',
       password: 'bridge-password',
     })
@@ -223,6 +245,7 @@ describe('signing in with an encrypted file', () => {
     const signInCsrf = await chooseEncrypted()
     const res = await send(`/sign-in?token=${token}`, {
       csrf: signInCsrf,
+      store: 'encrypted-file',
       address: 'someone@example.com',
       password: 'bridge-password',
       master: 'my-master',
@@ -330,6 +353,7 @@ describe('a browser-shaped request', () => {
     const page = await send(`/?token=${token}`)
     const res = await send(`/sign-in?token=${token}`, {
       csrf: csrfFrom(page.body, '/sign-in'),
+      store: 'encrypted-file',
       address: 'someone@example.com',
       password: 'bridge-password',
       master: 'my-master',

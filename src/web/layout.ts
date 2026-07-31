@@ -331,16 +331,110 @@ const STYLES = `
   button.danger:hover { background: var(--bad-bg); }
 
   .hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  /*
+   * The storage options.
+   *
+   * Each is a label wrapping a real radio, so the whole card is the click
+   * target while keyboard and assistive technology get the ordinary control.
+   * The selected state is drawn from :checked rather than from a class the
+   * server decided, which is what lets the choice change without a round trip.
+   */
   .option {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
     border: 1px solid var(--line);
     border-radius: 10px;
     padding: 14px 16px;
     margin: 10px 0;
     background: var(--surface);
+    cursor: pointer;
   }
-  .option.unavailable { opacity: 0.62; }
-  .option.chosen { border-color: var(--violet); box-shadow: 0 0 0 1px var(--violet); }
+  .option:hover { border-color: var(--muted); }
+  .option.unavailable { opacity: 0.62; cursor: not-allowed; }
+  .option input[type=radio] { margin: 5px 0 0; width: 17px; height: 17px; accent-color: var(--violet); }
+  .option-body { flex: 1 1 auto; min-width: 0; }
+  .option:has(input:checked) { border-color: var(--violet); box-shadow: 0 0 0 1px var(--violet); }
+  .option:has(input:focus-visible) { outline: 2px solid var(--violet); outline-offset: 2px; }
   .option header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .option h3 { font-weight: 600; }
+
+  /*
+   * The two blocks that follow the selection.
+   *
+   * :has() on the form rather than a sibling selector, so the markup can stay in
+   * the order a person reads it instead of the order CSS needs. Supported by
+   * every current browser; where it is not, the @supports rule below shows both
+   * blocks rather than hiding a field somebody needs to fill in. An interface
+   * that silently omits the master password field would be unusable in a way
+   * nobody could diagnose.
+   */
+  .master-fields, .warning-layer { display: none; }
+  form.sign-in:has(#store-encrypted-file:checked) .master-fields { display: block; }
+  form.sign-in:has(#store-plain-file:checked):has(#warning-seen:not(:checked)) .warning-layer {
+    display: flex;
+  }
+  @supports not selector(:has(*)) {
+    .master-fields { display: block; }
+  }
+
+  /* Visually gone, still a control: the checkbox the warning's button toggles. */
+  .offscreen {
+    position: absolute;
+    width: 1px; height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .warning-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    align-items: center;
+    justify-content: center;
+    background: rgba(20,15,45,0.55);
+  }
+  /*
+   * Clicking beside the box closes it too, which is what a dialog does. An
+   * empty label rather than a handler, since there is no script here; it sits
+   * beside the box rather than around it, because a label closes on any click
+   * inside itself and the box has to stay usable.
+   */
+  /* margin: 0 undoes the general label rule, which would otherwise inset it by
+   * 16px at the top and leave a strip the click does not reach. */
+  .warning-backdrop { position: absolute; inset: 0; margin: 0; cursor: default; }
+  .warning-box {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--warn-line);
+    border-top: 4px solid var(--warn-line);
+    border-radius: 12px;
+    padding: 22px 24px;
+    /* Margin rather than padding on the layer, so the backdrop reaches the
+     * very edge and a click anywhere outside the box closes it. */
+    margin: 20px;
+    max-width: 460px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    box-shadow: 0 12px 40px rgba(20,15,45,0.35);
+  }
+  .warning-box h3 { margin: 0 0 10px; font-size: 17px; }
+  .warning-box p { font-size: 14px; }
+  .warning-close {
+    display: inline-block;
+    margin: 18px 0 0;
+    padding: 10px 18px;
+    border-radius: 8px;
+    background: var(--violet);
+    color: #fff;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .warning-close:hover { background: var(--violet-strong); }
 
   .tag {
     font-size: 11px;

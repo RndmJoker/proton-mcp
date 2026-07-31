@@ -392,10 +392,6 @@ export class WebInterface {
       await this.#handleSignIn(response, body.fields)
       return
     }
-    if (writing && path === '/choose-store') {
-      await this.#handleChooseStore(response, body.fields)
-      return
-    }
     if (writing && path === '/unlock') {
       await this.#handleUnlock(response, body.fields)
       return
@@ -428,9 +424,9 @@ export class WebInterface {
   async #render(
     section: Section,
     response: ServerResponse,
-    outcome: { error?: string; notice?: string; address?: string } = {},
+    outcome: { error?: string; notice?: string; address?: string; store?: StoreKind } = {},
   ): Promise<void> {
-    const { error, notice, address } = outcome
+    const { error, notice, address, store } = outcome
     const status = await this.#options.getStatus()
     const token = this.#secrets.accessToken
     const disclaimer = this.#disclaimerFor(section)
@@ -454,11 +450,10 @@ export class WebInterface {
         token,
         disclaimer,
         csrf: csrfToken(this.#secrets, '/sign-in'),
-        csrfChooseStore: csrfToken(this.#secrets, '/choose-store'),
         stores,
         suggested: recommend(stores),
         suggestionReason: recommendationReason(stores),
-        ...(this.#chosenStore ? { chosen: this.#chosenStore } : {}),
+        ...(store ? { chosen: store } : {}),
         ...(error ? { error } : {}),
         ...(address ? { address } : {}),
       })
@@ -564,25 +559,6 @@ export class WebInterface {
     await this.#render(from, response)
   }
 
-  #chosenStore: StoreKind | undefined
-
-  async #handleChooseStore(response: ServerResponse, fields: Record<string, string>): Promise<void> {
-    const kind = fields.kind as StoreKind | undefined
-    if (!kind || !(kind in STORE_DESCRIPTIONS)) {
-      await this.#render('overview', response, { error: 'That storage option does not exist.' })
-      return
-    }
-    const stores = await listStores()
-    const chosen = stores.find((s) => s.kind === kind)
-    if (!chosen?.available) {
-      await this.#render('overview', response, {
-        error: `${STORE_DESCRIPTIONS[kind].title} cannot be used on this machine. ${chosen?.reason ?? ''}`,
-      })
-      return
-    }
-    this.#chosenStore = kind
-    await this.#render('overview', response)
-  }
 
   /**
    * The folders and labels, only ever on this page.
@@ -673,24 +649,58 @@ export class WebInterface {
     await this.#render('overview', response, { ...(error ? { error } : {}) })
   }
 
+  /**
+   * Reads the storage option out of the form.
+   *
+   * It arrives as a radio value now rather than being remembered from an
+   * earlier post, so it is ordinary untrusted input: a name that is not one of
+   * the four, or one that cannot work on this machine, falls back to the
+   * recommendation rather than being passed on.
+   */
+  async #storeFromForm(
+    fields: Record<string, string>,
+  ): Promise<{ store: StoreKind; error?: string }> {
+    const stores = await listStores()
+    const wanted = fields.store
+    if (!wanted || !(wanted in STORE_DESCRIPTIONS)) return { store: recommend(stores) }
+
+    const kind = wanted as StoreKind
+    const entry = stores.find((s) => s.kind === kind)
+    if (!entry?.available) {
+      return {
+        store: recommend(stores),
+        error: `${STORE_DESCRIPTIONS[kind].title} cannot be used on this machine. ${entry?.reason ?? ''}`,
+      }
+    }
+    return { store: kind }
+  }
+
   async #handleSignIn(response: ServerResponse, fields: Record<string, string>): Promise<void> {
     const address = (fields.address ?? '').trim()
     const password = fields.password ?? ''
+    const { store, error: storeError } = await this.#storeFromForm(fields)
+
+    if (storeError) {
+      await this.#render('overview', response, { error: storeError, address, store })
+      return
+    }
 
     if (!address || !password) {
       await this.#render('overview', response, {
         error: 'Both the address and the Bridge password are required.',
         address,
+        store,
       })
       return
     }
 
-    const stores = await listStores()
-    const store = this.#chosenStore ?? recommend(stores)
-
     // Checked here rather than in the session, because this is where the second
     // field exists to compare against. A typo in a password nothing can recover
     // has to be caught before it is used to encrypt anything.
+    //
+    // Read only for the store that uses it. The field is in the document for
+    // every option now, hidden by CSS, so a value left behind by switching
+    // options would otherwise be taken for a choice.
     let master: string | undefined
     if (store === 'encrypted-file') {
       master = fields.master ?? ''
@@ -698,6 +708,7 @@ export class WebInterface {
         await this.#render('overview', response, {
           error: 'The encrypted file needs a master password to encrypt the credentials with.',
           address,
+          store,
         })
         return
       }
@@ -705,6 +716,7 @@ export class WebInterface {
         await this.#render('overview', response, {
           error: 'The two master passwords do not match.',
           address,
+          store,
         })
         return
       }
@@ -713,7 +725,7 @@ export class WebInterface {
     const error = await this.#options.onSignIn({ user: address, pass: password }, store, master)
     // No password is kept anywhere in this class, whatever the outcome.
     await this.#render('overview', response, {
-      ...(error ? { error, address } : {}),
+      ...(error ? { error, address, store } : {}),
     })
   }
 }

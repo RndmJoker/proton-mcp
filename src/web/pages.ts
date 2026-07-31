@@ -29,44 +29,69 @@ function exposureTag(exposure: DiskExposure): string {
   return `<span class="tag exposure-${exposure}">${escapeHtml(EXPOSURE_LABELS[exposure])}</span>`
 }
 
-/** One storage option, with both sides of the judgement. */
-function storeOption(
-  store: StoreAvailability,
-  suggested: boolean,
-  chosen: boolean,
-  csrf: string,
-  token: string,
-): string {
-  // The chosen option gets no button: pressing it again would do nothing, and a
-  // live button next to the word "selected" invites the doubt this is meant to
-  // remove.
-  const button =
-    store.available && !chosen
-      ? `<form method="post" action="/choose-store?token=${escapeHtml(token)}">
-         <input type="hidden" name="csrf" value="${escapeHtml(csrf)}">
-         <input type="hidden" name="kind" value="${escapeHtml(store.kind)}">
-         <button type="submit">Use this</button>
-       </form>`
-      : ''
-
+/**
+ * One storage option, as a radio inside the sign-in form.
+ *
+ * It used to be a form of its own that posted the choice and re-rendered the
+ * page. That worked and read badly: picking one of four options reloaded
+ * everything, and a page that flashes on every click feels like something went
+ * wrong. Now the choice travels with the credentials in one submission, and
+ * nothing happens until Connect is pressed.
+ *
+ * The whole card is the label, so the click target is the card rather than a
+ * small circle. The radio itself stays a real radio: keyboard and screen readers
+ * get the ordinary control, and the styling is a ring around the card.
+ */
+function storeOption(store: StoreAvailability, suggested: boolean, chosen: boolean): string {
   const classes = ['option']
   if (!store.available) classes.push('unavailable')
-  if (chosen) classes.push('chosen')
 
-  return `<div class="${classes.join(' ')}">
-  <header>
-    <h3>${escapeHtml(store.title)}</h3>
-    ${exposureTag(store.exposure)}
-    <span class="tag">prompts: ${escapeHtml(store.prompts)}</span>
-    ${chosen ? '<span class="tag chosen">selected</span>' : ''}
-    ${suggested && !chosen ? '<span class="tag suggested">suggested</span>' : ''}
-  </header>
-  <p class="hint">${escapeHtml(store.summary)}</p>
-  <p class="pro">${escapeHtml(store.benefit)}</p>
-  <p class="con">${escapeHtml(store.cost)}</p>
-  <p class="who">${escapeHtml(store.bestFor)}</p>
-  ${store.reason ? `<p class="blocked">${escapeHtml(store.reason)}</p>` : ''}
-  ${button}
+  const id = `store-${store.kind}`
+  return `<label class="${classes.join(' ')}" for="${id}">
+  <input type="radio" name="store" id="${id}" value="${escapeHtml(store.kind)}"
+         ${chosen ? 'checked' : ''} ${store.available ? '' : 'disabled'}>
+  <div class="option-body">
+    <header>
+      <h3>${escapeHtml(store.title)}</h3>
+      ${exposureTag(store.exposure)}
+      <span class="tag">prompts: ${escapeHtml(store.prompts)}</span>
+      ${suggested ? '<span class="tag suggested">suggested</span>' : ''}
+    </header>
+    <p class="hint">${escapeHtml(store.summary)}</p>
+    <p class="pro">${escapeHtml(store.benefit)}</p>
+    <p class="con">${escapeHtml(store.cost)}</p>
+    <p class="who">${escapeHtml(store.bestFor)}</p>
+    ${store.reason ? `<p class="blocked">${escapeHtml(store.reason)}</p>` : ''}
+  </div>
+</label>`
+}
+
+/**
+ * The warning shown when the plain file is picked.
+ *
+ * The card already states the cost in one line, and one line is easy to read
+ * past when it sits between three other options. This one is in the way, which
+ * is the point: it is the only option that leaves a usable password where
+ * anything that can read your files can read it.
+ *
+ * It is not a refusal. The choice stays available and the warning closes, both
+ * because the trade is sometimes the right one and because nobody is served by
+ * a tool that decides for them. Shown and closed entirely in CSS, since there is
+ * no JavaScript here to open a dialog with.
+ */
+function plainFileWarning(): string {
+  return `<div class="warning-layer">
+  <label for="warning-seen" class="warning-backdrop" aria-hidden="true"></label>
+  <div class="warning-box">
+    <h3>The password will be readable</h3>
+    <p>A plain file keeps your Bridge password as text. The file is created with mode
+    <code>600</code>, so only your user account can read it, and that is the whole of the
+    protection: <strong>anything running as you can read it too</strong>, including a program
+    you did not mean to run.</p>
+    <p class="hint">The other three options all avoid this. The encrypted file works everywhere
+    the plain one does and asks for a master password once per start.</p>
+    <label for="warning-seen" class="warning-close">I understand, keep this option</label>
+  </div>
 </div>`
 }
 
@@ -75,15 +100,6 @@ export interface LoginPageData {
   csrf: string
   /** See sections.ts: required so that it cannot be lost by omission. */
   disclaimer: DisclaimerState
-  /**
-   * CSRF token for picking a store, bound to that action alone.
-   *
-   * Separate from `csrf` because the check binds a token to the path it is
-   * posted to. Reusing the sign-in token here made every "Use this" button
-   * answer 404, which is what kept the encrypted file from being selectable at
-   * all.
-   */
-  csrfChooseStore: string
   stores: StoreAvailability[]
   suggested: StoreKind
   suggestionReason: string
@@ -98,12 +114,21 @@ export interface LoginPageData {
 /**
  * The extra fields the encrypted file needs.
  *
- * Only rendered for that one store, because it is the only one with a secret of
- * its own. Two fields rather than one: a mistyped master password that nothing
- * anywhere can recover is worth one extra line of typing.
+ * Always in the document now, and shown by CSS when that option is selected.
+ * They used to be rendered only for that store, which meant selecting it had to
+ * reload the page to make them appear.
+ *
+ * Two fields rather than one: a mistyped master password that nothing anywhere
+ * can recover is worth one extra line of typing.
+ *
+ * They are not disabled while hidden, and that is deliberate. A hidden field
+ * submits its value, so a master password typed and then abandoned by switching
+ * options would still travel. The server ignores it for any other store, and
+ * ignoring it there is the one place that decision belongs.
  */
 function masterPasswordFields(): string {
-  return `  <label for="master">Master password for the encrypted file</label>
+  return `<div class="master-fields">
+  <label for="master">Master password for the encrypted file</label>
   <input id="master" name="master" type="password" autocomplete="new-password">
   <p class="hint">Chosen by you, and asked for again every time this server starts. It is not stored
   anywhere: <strong>if you forget it, the saved Bridge password is gone</strong> and you have to
@@ -111,24 +136,27 @@ function masterPasswordFields(): string {
 
   <label for="masterRepeat">Repeat the master password</label>
   <input id="masterRepeat" name="masterRepeat" type="password" autocomplete="new-password">
-`
+</div>`
 }
 
+/**
+ * The sign-in form.
+ *
+ * One form for everything: the address, the password and where the password
+ * goes. Nothing is submitted until Connect is pressed, so choosing among the
+ * four options costs no round trip and the page does not move under the
+ * pointer.
+ *
+ * Two things appear and disappear with the selection, both in CSS: the master
+ * password fields for the encrypted file, and the warning for the plain file.
+ * See the stylesheet for how, and for what happens in a browser too old to do
+ * it.
+ */
 export function loginPage(data: LoginPageData): string {
   const effective = data.chosen ?? data.suggested
   const options = data.stores
-    .map((store) =>
-      storeOption(
-        store,
-        store.kind === data.suggested,
-        store.kind === effective,
-        data.csrfChooseStore,
-        data.token,
-      ),
-    )
+    .map((store) => storeOption(store, store.kind === data.suggested, store.kind === effective))
     .join('\n')
-
-  const chosenTitle = data.stores.find((s) => s.kind === effective)?.title ?? effective
 
   return layout({
     title: 'Sign in',
@@ -141,9 +169,11 @@ own machine and the password is never sent anywhere else.</p>
 
 ${errorBanner(data.error)}
 
-<div class="card">
-<form method="post" action="/sign-in?token=${escapeHtml(data.token)}">
+<form method="post" action="/sign-in?token=${escapeHtml(data.token)}" class="sign-in">
   <input type="hidden" name="csrf" value="${escapeHtml(data.csrf)}">
+  <input type="checkbox" id="warning-seen" class="offscreen">
+
+<div class="card">
   <label for="address">Proton address</label>
   <input id="address" name="address" type="text" autocomplete="off" spellcheck="false"
          value="${escapeHtml(data.address ?? '')}" placeholder="you@example.com">
@@ -155,17 +185,21 @@ ${errorBanner(data.error)}
   one per account. You find it in the Bridge application under the account, or by running
   <code>protonmail-bridge --cli</code> and then <code>info</code>.</p>
 
-${effective === 'encrypted-file' ? masterPasswordFields() : ''}
-  <p class="hint">Will be kept in: <strong>${escapeHtml(chosenTitle)}</strong>. Change that below
-  before connecting.</p>
-
-  <button type="submit">Connect</button>
-</form>
+${masterPasswordFields()}
 </div>
 
 <h2>Where should the password be kept?</h2>
 <p class="lead">${escapeHtml(data.suggestionReason)}</p>
-${options}`,
+${options}
+
+<div class="card">
+  <button type="submit">Connect</button>
+  <p class="hint">Nothing is sent until you press this. The Bridge is asked whether the credentials
+  work before they are stored anywhere.</p>
+</div>
+
+${plainFileWarning()}
+</form>`,
   })
 }
 
