@@ -14,6 +14,15 @@ import type { Draft } from '../../src/mail/compose.js'
  * The confirmation is the project's one real security boundary, so these tests
  * are written from the attacker's side: what would a message that a model just
  * read have to achieve to get something sent that the user did not agree to?
+ *
+ * One caveat, learned the hard way. The `clientCanConfirm` group below hands
+ * the check a context carrying a per-request envelope, which is what protocol
+ * revision 2026-07-28 delivers. On the revision this SDK actually speaks there
+ * is no envelope, and for one release the check read nothing else and refused
+ * every client while all of these tests stayed green. What proves the check
+ * works is confirmation-over-the-wire.test.ts, which drives a real handshake.
+ * These stay because the envelope path is still a path; they are just not the
+ * evidence they look like.
  */
 
 function draft(over: Partial<Draft> = {}): Draft {

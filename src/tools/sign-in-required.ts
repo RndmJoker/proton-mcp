@@ -27,11 +27,14 @@
  * the retry is an ordinary second invocation rather than a loop inside the
  * handler.
  *
- * The SDK documents a shim that fulfils such a return on 2025-era connections
- * too, but not under `serveStdio`: measured against the live SDK it answers
- * "per-request legacy serving cannot receive server-to-client requests". Older
- * clients therefore get the text answer, which needs nothing from the client and
- * works everywhere. See clientCanShowUrl.
+ * The SDK's shim fulfils such a return on a 2025-era connection as well, and it
+ * does so under `serveStdio` too. An earlier note here said otherwise, on the
+ * strength of a measurement that must have been taken against a different
+ * serving mode; re-measured on 31.07.2026 against SDK 2.0.0, `serveStdio` pins
+ * one instance for the life of the connection, the returned request reaches the
+ * client as an `elicitation/create`, and the answer comes back. The text answer
+ * below is therefore the fallback for a client that declares nothing, not for
+ * every client. See clientCanShowUrl.
  *
  * ## No requestState
  *
@@ -45,6 +48,7 @@
 
 import { inputRequired, inputResponse } from '@modelcontextprotocol/server'
 import type { CallToolResult, InputRequiredResult } from '@modelcontextprotocol/server'
+import { canElicitUrl } from './capabilities.js'
 
 /**
  * The key our embedded elicitation is filed under.
@@ -54,9 +58,6 @@ import type { CallToolResult, InputRequiredResult } from '@modelcontextprotocol/
  */
 export const SIGN_IN_KEY = 'protonMcpSignIn'
 
-/** Where the client's declared capabilities live on a 2026-era request. */
-const CLIENT_CAPABILITIES_KEY = 'io.modelcontextprotocol/clientCapabilities'
-
 const MESSAGE =
   'proton-mcp is not signed in to Proton Mail Bridge yet. Open the configuration page and enter ' +
   'the Proton address together with the Bridge password, which is the one the Bridge generates ' +
@@ -65,29 +66,9 @@ const MESSAGE =
 /** The parts of the tool context this module reads. */
 interface SignInContext {
   mcpReq?: {
-    /** Reserved `_meta` keys of the request, on the 2026-07-28 era. */
-    envelope?: Record<string, unknown>
     /** Present when the client is retrying after fulfilling our request. */
     inputResponses?: Record<string, unknown>
   }
-}
-
-/**
- * Whether a capabilities object declares URL elicitation.
- *
- * The wire shape is `elicitation: { url: {} }`, a nested record rather than a
- * boolean. Measured against the live SDK, which answers a `url: true` with
- * "expected record, received boolean" and refuses the whole request. So this is
- * a presence check, matching the SDK's own gate, and not a comparison against
- * `true` that no real client would ever satisfy.
- *
- * Typed as unknown and narrowed by hand on purpose: the client sent this, so its
- * shape is a claim rather than a guarantee.
- */
-function declaresUrlElicitation(capabilities: unknown): boolean {
-  const elicitation = (capabilities as { elicitation?: unknown } | undefined)?.elicitation
-  const url = (elicitation as { url?: unknown } | undefined)?.url
-  return url !== undefined && url !== null && url !== false
 }
 
 /**
@@ -98,24 +79,15 @@ function declaresUrlElicitation(capabilities: unknown): boolean {
  * the SDK *after* the handler returns. The caller would get that refusal instead
  * of an address, so an undeclared capability means the text answer.
  *
- * Only the request's own envelope is consulted, and that is a measured decision
- * rather than an oversight. An older client declares its capabilities once at
- * handshake time, so the obvious addition is to fall back to
- * `server.getClientCapabilities()`. Tried against the live SDK, it returns
- * undefined under `serveStdio`, and forcing the elicitation through anyway
- * yields the SDK's own verdict:
- *
- *   "per-request legacy serving cannot receive server-to-client requests"
- *
- * So there is no elicitation to be had on a 2025-era connection here at all. A
- * fallback would only ever turn a usable answer into that message, which is why
- * older clients get the address in plain text instead. That path works
- * everywhere and needs nothing from the client.
+ * The paragraph that used to stand here claimed, as a measurement, that only the
+ * request's own envelope could be consulted and that a handshake declaration was
+ * unavailable under `serveStdio`. That was wrong, and it was wrong in the
+ * expensive direction: on this SDK the envelope does not exist at all, so the
+ * check answered no for every client and the elicitation never once fired. Where
+ * the declaration now comes from is in capabilities.ts.
  */
 export function clientCanShowUrl(ctx: unknown): boolean {
-  return declaresUrlElicitation(
-    (ctx as SignInContext)?.mcpReq?.envelope?.[CLIENT_CAPABILITIES_KEY],
-  )
+  return canElicitUrl(ctx)
 }
 
 /** The failure used when elicitation is unavailable, declined or fruitless. */

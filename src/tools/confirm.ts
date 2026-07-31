@@ -39,12 +39,10 @@ import { createHash } from 'node:crypto'
 import { inputRequired, acceptedContent } from '@modelcontextprotocol/server'
 import type { CallToolResult, InputRequiredResult } from '@modelcontextprotocol/server'
 import { describeRecipients, firstLines, showRecipient, type Draft } from '../mail/compose.js'
+import { canElicitForm } from './capabilities.js'
 
 /** The key our embedded elicitation is filed under. */
 export const CONFIRM_KEY = 'protonMcpSendConfirmation'
-
-/** Where the client's declared capabilities live on a 2026-era request. */
-const CLIENT_CAPABILITIES_KEY = 'io.modelcontextprotocol/clientCapabilities'
 
 /** What travels through the client and comes back, sealed. */
 export interface PendingSend {
@@ -57,7 +55,6 @@ export interface PendingSend {
 /** The parts of the tool context this module reads. */
 interface ConfirmContext {
   mcpReq?: {
-    envelope?: Record<string, unknown>
     inputResponses?: Record<string, unknown>
     requestState?: <T>() => T | undefined
   }
@@ -93,17 +90,12 @@ export function digestOf(draft: Draft): string {
  * have to decide what to do about a confirmation that never appeared. Better to
  * know beforehand and refuse plainly.
  *
- * A bare `elicitation: {}` counts, which matches the SDK's own gate: before
- * modes existed, that was how form support was declared.
+ * Where the declaration is read from is capabilities.ts, and it is worth
+ * following that link once: reading it from the wrong place is what made every
+ * send refuse in v0.4.0.
  */
 export function clientCanConfirm(ctx: unknown): boolean {
-  const declared = (ctx as ConfirmContext)?.mcpReq?.envelope?.[CLIENT_CAPABILITIES_KEY]
-  const elicitation = (declared as { elicitation?: unknown } | undefined)?.elicitation
-  if (elicitation === undefined || elicitation === null) return false
-  const form = (elicitation as { form?: unknown; url?: unknown }).form
-  if (form !== undefined && form !== null && form !== false) return true
-  // A declaration with no modes at all is the pre-mode way of saying "form".
-  return Object.keys(elicitation as Record<string, unknown>).length === 0
+  return canElicitForm(ctx)
 }
 
 /** What the message would look like to the person being asked. */

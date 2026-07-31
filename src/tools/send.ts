@@ -26,12 +26,17 @@ import {
   readDraftForSending,
   DRAFTS,
 } from '../mail/drafts.js'
-import { mintMessageId, parseRecipient, parseRecipients, type Draft } from '../mail/compose.js'
+import {
+  describeRecipients,
+  mintMessageId,
+  parseRecipient,
+  parseRecipients,
+  type Draft,
+} from '../mail/compose.js'
 import {
   clientCanConfirm,
   confirmationAnswer,
   confirmationRequest,
-  describeForConfirmation,
   digestOf,
   pendingSend,
   refuse,
@@ -52,11 +57,21 @@ const AFTER_NOTE =
   'in Sent, so do not look for it straight away. An immediate listing would be misleading rather ' +
   'than informative.'
 
+/**
+ * What went out.
+ *
+ * Built from the draft rather than cut out of the confirmation text by line
+ * number. The first version did the latter and lost the body: it printed "The
+ * message begins:" followed by nothing, because a slice by index breaks the
+ * moment the text it slices gains a line.
+ */
 function describeOutcome(draft: Draft, outcome: SendOutcome): string {
   const lines = [
     `Sent. The Bridge accepted the message for ${outcome.accepted.length} recipient(s).`,
     '',
-    describeForConfirmation(draft, 'The message').split('\n').slice(2, -3).join('\n'),
+    describeRecipients(draft),
+    `Subject: ${draft.subject || '(no subject)'}`,
+    ...(draft.attachedMessage ? [`Attached: ${draft.attachedMessage.filename}`] : []),
     `Id: ${outcome.messageId}`,
   ]
   if (outcome.rejected.length) {
