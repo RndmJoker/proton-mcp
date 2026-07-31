@@ -73,9 +73,11 @@ async function main(): Promise<void> {
   // Stored ports fill in only where the environment said nothing. An explicit
   // BRIDGE_IMAP_PORT has to keep meaning what it says.
   const explicitPorts = portsSetExplicitly()
-  const stored = await loadSettings()
-  if (!explicitPorts.imapPort && stored.imapPort !== undefined) config.imapPort = stored.imapPort
-  if (!explicitPorts.smtpPort && stored.smtpPort !== undefined) config.smtpPort = stored.smtpPort
+  // Held rather than read once: every write goes through the whole object, so
+  // that saving one setting cannot drop another. saveSettings replaces the file.
+  const settings = await loadSettings()
+  if (!explicitPorts.imapPort && settings.imapPort !== undefined) config.imapPort = settings.imapPort
+  if (!explicitPorts.smtpPort && settings.smtpPort !== undefined) config.smtpPort = settings.smtpPort
 
   const environmentCredentials = credentialsFromEnvironment()
   const session = new Session({
@@ -195,10 +197,12 @@ async function main(): Promise<void> {
       : {
           onPorts: async (ports) => {
             try {
-              await saveSettings(ports)
+              await saveSettings({ ...settings, ...ports })
             } catch (error) {
               return `The ports could not be saved: ${(error as Error).message}`
             }
+            settings.imapPort = ports.imapPort
+            settings.smtpPort = ports.smtpPort
             // The Connection reads this object on every reconnect, so closing
             // the current one is all that is needed for the change to take.
             config.imapPort = ports.imapPort
@@ -208,6 +212,17 @@ async function main(): Promise<void> {
             return undefined
           },
         }),
+    noticeDismissed: () => settings.noticeDismissed === true,
+    onDismissNotice: async () => {
+      settings.noticeDismissed = true
+      try {
+        await saveSettings(settings)
+      } catch (error) {
+        // Worth a line, not worth failing over: the notice is hidden for this
+        // run either way, and the next start simply shows it again.
+        notify(`the dismissed notice could not be remembered: ${(error as Error).message}`)
+      }
+    },
     onTest: async () => {
       try {
         const mailboxes = await connection.listMailboxes()

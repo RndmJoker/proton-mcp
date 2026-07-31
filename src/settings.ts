@@ -24,6 +24,15 @@ import { homedir } from 'node:os'
 export interface StoredSettings {
   imapPort?: number
   smtpPort?: number
+  /**
+   * Whether the "not affiliated with Proton" notice was sent away.
+   *
+   * Kept here rather than in the browser because there is no JavaScript in the
+   * interface to write a cookie, and because a setting the server holds is the
+   * same setting in every browser. It only ever hides the paragraph: the
+   * `unofficial` mark beside the name stays whatever this says.
+   */
+  noticeDismissed?: boolean
 }
 
 /** Where the settings live. Next to the credentials, under the user's own data. */
@@ -65,6 +74,9 @@ export async function loadSettings(path = settingsPath()): Promise<StoredSetting
   const settings: StoredSettings = {}
   if (isPort(candidate.imapPort)) settings.imapPort = candidate.imapPort
   if (isPort(candidate.smtpPort)) settings.smtpPort = candidate.smtpPort
+  // Only a literal true hides it. Anything else, including a string "true" from
+  // a hand-edited file, leaves the notice where it is.
+  if (candidate.noticeDismissed === true) settings.noticeDismissed = true
   return settings
 }
 
