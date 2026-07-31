@@ -38,6 +38,8 @@ This server therefore runs on your machine as well, started by the AI client as 
 
 Every tool that composes a message takes either `text` or `html`, never both: Proton drops the plain text half of a message that carries markup, so the half you confirmed would be the half that never arrived.
 
+The server also tells an assistant how it works, so the rules are not something a model has to infer from failures. A short text travels with every connection naming the four things that go wrong quietly, and two longer guides can be read on demand: `proton-mcp://guide/writing` for composing messages and `proton-mcp://guide/bridge` for the measured behaviour of the Bridge itself.
+
 Underneath: a held IMAP connection that recovers from a Bridge restart, stable identifiers based on the Message-ID, HTML to text conversion, filtering of the public key Proton attaches to every sent message, and a character budget so a single message cannot exhaust a context window.
 
 There is also a **local web interface**, on `127.0.0.1` only, running for as long as the server does:
