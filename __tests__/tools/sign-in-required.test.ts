@@ -8,8 +8,15 @@ import {
   retryNote,
   SIGN_IN_KEY,
 } from '../../src/tools/sign-in-required.js'
-import { withSignIn, setSignInHint, _clearSignInHint } from '../../src/tools/failures.js'
+import {
+  withSignIn,
+  setSignInHint,
+  setLockedCheck,
+  describeFailure,
+  _clearSignInHint,
+} from '../../src/tools/failures.js'
 import { NotSignedInError } from '../../src/bridge/connection.js'
+import { explainError } from '../../src/bridge/errors.js'
 import { BridgeError } from '../../src/bridge/errors.js'
 
 /**
@@ -267,5 +274,139 @@ describe('withSignIn', () => {
       expect(JSON.stringify(result)).not.toMatch(/enter (it|the password) here/i)
       expect(text(result)).toContain('Do not ask for the password')
     }
+  })
+})
+
+
+describe('credentials that are only locked', () => {
+  /**
+   * The situation: an encrypted file exists, the Bridge password is on disk,
+   * and the one thing missing is the master password the user chose.
+   *
+   * The ordinary message sends them to the Bridge application to look up a
+   * password they already stored. That is not merely unhelpful, it is the
+   * advice that ends with somebody deleting the encrypted file to escape a
+   * loop they were never in.
+   */
+  it('asks for the master password, not the Bridge password', async () => {
+    setSignInHint(() => url)
+    setLockedCheck(async () => true)
+
+    const result = await withSignIn(context(), async () => {
+      throw new NotSignedInError('nothing stored')
+    })
+    const answer = text(result)
+
+    expect(answer).toContain('encrypted file that is not open yet')
+    expect(answer).toContain('master password')
+    expect(answer).toContain(url)
+    // The wrong errand, in as many words.
+    expect(answer).not.toContain('the one the Bridge generates')
+    expect(answer).not.toContain('no address has to be entered again\n\nOpen undefined')
+  })
+
+  it('still refuses to have the master password typed into the chat', async () => {
+    setSignInHint(() => url)
+    setLockedCheck(async () => true)
+    const result = await withSignIn(context(), async () => {
+      throw new NotSignedInError('locked')
+    })
+    expect(text(result)).toContain('Do not ask for the master password in this conversation')
+  })
+
+  it('says the page is the only way in when it is not running', async () => {
+    setLockedCheck(async () => true)
+    const result = await withSignIn(context(), async () => {
+      throw new NotSignedInError('locked')
+    })
+    const answer = text(result)
+    // BRIDGE_USER and BRIDGE_PASS would be the wrong advice here: the stored
+    // credentials are fine, they are just closed.
+    expect(answer).not.toContain('BRIDGE_USER')
+    expect(answer).toContain('PROTON_MCP_WEB_PORT')
+  })
+
+  it('carries the right message into the elicitation as well', () => {
+    const request = signInElicitation(url, 'locked')
+    expect(isInputRequiredResult(request)).toBe(true)
+    expect(JSON.stringify(request)).toContain('encrypted file that is not open yet')
+  })
+
+  it('names the master password in the retry note', () => {
+    expect(retryNote('accepted', 'locked')).toContain('master password was not entered')
+    expect(retryNote('accepted')).toContain('sign-in was not completed')
+  })
+
+  it('falls back to the ordinary message when nothing can answer', async () => {
+    // No check wired: more than is needed rather than wrong, since the sign-in
+    // message names both the address and the password.
+    setSignInHint(() => url)
+    const result = await withSignIn(context(), async () => {
+      throw new NotSignedInError('nothing stored')
+    })
+    expect(text(result)).toContain('not signed in to Proton Mail Bridge yet')
+  })
+
+  it('falls back to the ordinary message when the check throws', async () => {
+    setSignInHint(() => url)
+    setLockedCheck(async () => {
+      throw new Error('the keyring is not answering')
+    })
+    const result = await withSignIn(context(), async () => {
+      throw new NotSignedInError('nothing stored')
+    })
+    expect(text(result)).toContain('not signed in to Proton Mail Bridge yet')
+  })
+})
+
+
+describe('a Bridge that cannot be reached', () => {
+  /**
+   * The message from errors.ts says what happened. What is checked here is the
+   * part that says who has to act, because without it a model either retries in
+   * a loop or offers to start an application it cannot reach.
+   */
+  it('tells the agent that only the user can start the Bridge', () => {
+    setSignInHint(() => url)
+    const failure = explainError({ code: 'ECONNREFUSED' }, '127.0.0.1', 1143)
+    const answer = text(describeFailure(failure, 'listing mailboxes'))
+
+    expect(answer).toContain('start and unlock it themselves')
+    expect(answer).toContain('Do not retry in a loop')
+    expect(answer).toContain(url)
+  })
+
+  it('sends a rejected password to the page rather than into the chat', () => {
+    setSignInHint(() => url)
+    const failure = explainError({ responseText: 'AUTHENTICATIONFAILED' }, '127.0.0.1', 1143)
+    const answer = text(describeFailure(failure, 'listing mailboxes'))
+
+    expect(answer).toContain('enter the current one')
+    expect(answer).toContain('Do not ask for it in this conversation')
+    expect(answer).toContain(url)
+  })
+
+  it('distinguishes not ready from not running', () => {
+    setSignInHint(() => url)
+    const answer = text(
+      describeFailure(explainError({ code: 'ETIMEDOUT' }, '127.0.0.1', 1143), 'listing'),
+    )
+    expect(answer).toContain('not ready yet')
+    expect(answer).not.toContain('Do not retry in a loop')
+  })
+
+  it('adds nothing where the interface cannot help', () => {
+    setSignInHint(() => url)
+    const failure = explainError(new Error('self-signed certificate'), '127.0.0.1', 1143)
+    const answer = text(describeFailure(failure, 'listing'))
+    expect(answer).toBe(failure.message)
+  })
+
+  it('leaves out the address when no page is running', () => {
+    const answer = text(
+      describeFailure(explainError({ code: 'ECONNREFUSED' }, '127.0.0.1', 1143), 'listing'),
+    )
+    expect(answer).toContain('start and unlock it themselves')
+    expect(answer).not.toContain('The configuration page is at')
   })
 })

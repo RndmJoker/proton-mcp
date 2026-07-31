@@ -264,6 +264,7 @@ export class Connection {
           `The mailbox "${path}" could not be opened. Check the exact spelling; ` +
             'user folders live below "Folders/" and labels below "Labels/". ' +
             'Use list_folders to see the available paths.',
+          'none',
           { cause: error },
         )
       }

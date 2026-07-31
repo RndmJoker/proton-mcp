@@ -31,6 +31,25 @@ export function normaliseMessageId(id: string): string {
   return `<${bare}>`
 }
 
+/**
+ * The identifier as this server hands it out.
+ *
+ * Every answer uses this, so that the same message has the same name whichever
+ * tool named it. It did not, and the difference was invisible until it was not:
+ * a listing reads the IMAP envelope, which repeats the header as it stands,
+ * while reading a message goes through a MIME parser that adds the brackets RFC
+ * 5322 requires. For a header written correctly both agree. For one written
+ * without brackets the same message came back under two names.
+ *
+ * An empty identifier stays empty rather than becoming `<>`. A message without
+ * one cannot be addressed at all, and pretending otherwise would only move the
+ * failure further away from its cause.
+ */
+export function presentMessageId(raw: string): string {
+  const trimmed = raw.trim()
+  return trimmed ? normaliseMessageId(trimmed) : ''
+}
+
 export interface ResolvedMessage {
   messageId: string
   /** The mailbox the message was found in. */
@@ -41,13 +60,73 @@ export interface ResolvedMessage {
   uidValidity: string
 }
 
-/** Searches one mailbox for a Message-ID and returns the UID if present. */
-async function findIn(client: ImapFlow, messageId: string): Promise<number | undefined> {
-  const hits = await client.search({ header: { 'message-id': messageId } }, { uid: true })
-  if (!hits || hits.length === 0) return undefined
-  // Several hits would mean duplicates of the same message inside one mailbox.
-  // The highest UID is the most recent copy.
-  return Math.max(...hits)
+/** The identifier without its angle brackets, whether it had any or not. */
+function bareForm(messageId: string): string {
+  return messageId.replace(/^<|>$/g, '')
+}
+
+/**
+ * Checks that a hit really carries this identifier.
+ *
+ * Needed because the IMAP header search is a **substring** comparison, measured
+ * against the Bridge on 31.07.2026: searching for a fragment of an identifier
+ * returns the message. So a search for `abc@example.com` also matches a message
+ * whose header reads `<xyzabc@example.com>`, and taking that hit would mark the
+ * wrong message. Silently, which is the part that matters for a write.
+ *
+ * The envelope is read rather than the raw header, because that is the same
+ * source list_messages hands its identifiers out from. Comparing against
+ * anything else could agree with the header and disagree with what the caller
+ * was given.
+ */
+async function carriesId(client: ImapFlow, uid: number, bare: string): Promise<boolean> {
+  const message = await client.fetchOne(String(uid), { envelope: true }, { uid: true })
+  const actual = message && message.envelope ? (message.envelope.messageId ?? '') : ''
+  return bareForm(actual.trim()) === bare
+}
+
+/**
+ * Searches one mailbox for a Message-ID and returns the UID if present.
+ *
+ * Two attempts, and the second one exists because of a real message.
+ *
+ * RFC 5322 requires the angle brackets, so `normaliseMessageId` puts them back
+ * on and the first search asks for the bracketed form. That search is exact in
+ * practice even though the comparison is a substring one: `<abc>` cannot occur
+ * inside `<xyzabc>`, because the bracket has to sit immediately before the
+ * identifier.
+ *
+ * Real mail does not always obey. A message was found whose header carries the
+ * identifier bare, and the envelope hands it out exactly as it stands, so
+ * everything this server had already reported for that message was unfindable:
+ * the bracketed search never matched, and it was the only search there was.
+ * Marking 67 messages as read left that one behind with no way to reach it.
+ *
+ * The second attempt therefore drops the brackets, which finds both spellings,
+ * and every hit is verified because that search can also match a message that
+ * merely contains the identifier. It only runs when the first one came back
+ * empty, so nothing normal pays for it.
+ */
+export async function findByMessageId(
+  client: ImapFlow,
+  messageId: string,
+): Promise<number | undefined> {
+  const exact = await client.search({ header: { 'message-id': messageId } }, { uid: true })
+  if (exact && exact.length > 0) {
+    // Several hits mean duplicates of the same message inside one mailbox.
+    // The highest UID is the most recent copy.
+    return Math.max(...exact)
+  }
+
+  const bare = bareForm(messageId)
+  const loose = await client.search({ header: { 'message-id': bare } }, { uid: true })
+  if (!loose || loose.length === 0) return undefined
+
+  // Newest first, so a duplicate resolves to the more recent copy like above.
+  for (const uid of [...loose].sort((a, b) => b - a)) {
+    if (await carriesId(client, uid, bare)) return uid
+  }
+  return undefined
 }
 
 /**
@@ -69,7 +148,7 @@ export async function resolveMessageId(
   for (const path of candidates) {
     const found = await connection.withMailbox(path, async (client, status) => {
       if (status.messages === 0) return undefined
-      const uid = await findIn(client, messageId)
+      const uid = await findByMessageId(client, messageId)
       return uid === undefined ? undefined : { uid, uidValidity: status.uidValidity }
     })
     if (found) {

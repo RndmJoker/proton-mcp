@@ -11,7 +11,7 @@
  */
 
 import type { CallToolResult, InputRequiredResult } from '@modelcontextprotocol/server'
-import { BridgeError } from '../bridge/errors.js'
+import { BridgeError, type BridgeRemedy } from '../bridge/errors.js'
 import { NotSignedInError } from '../bridge/connection.js'
 import {
   clientCanShowUrl,
@@ -19,6 +19,7 @@ import {
   retryNote,
   signInElicitation,
   signInFailure,
+  type MissingCredentials,
 } from './sign-in-required.js'
 
 /**
@@ -33,9 +34,29 @@ export function setSignInHint(hint: () => string | undefined): void {
   signInHint = hint
 }
 
+/**
+ * Whether the stored credentials are merely locked.
+ *
+ * Separate from the address because it is a different question with a different
+ * answer for the user. Missing credentials mean fetching the Bridge password;
+ * locked ones mean typing the master password the user chose themselves.
+ * Telling somebody to do the first when they need the second is how an
+ * encrypted file ends up being thrown away.
+ *
+ * Absent means not locked, which is the safe direction: the sign-in message
+ * names both the address and the password, so it is merely more than needed
+ * rather than wrong.
+ */
+let lockedCheck: (() => Promise<boolean>) | undefined
+
+export function setLockedCheck(check: () => Promise<boolean>): void {
+  lockedCheck = check
+}
+
 /** For tests, which must not inherit a hint from another test. */
 export function _clearSignInHint(): void {
   signInHint = undefined
+  lockedCheck = undefined
 }
 
 /** The sign-in address, when the interface is running. */
@@ -43,8 +64,60 @@ export function signInUrl(): string | undefined {
   return signInHint?.()
 }
 
+/** Which of the two situations the caller is in. */
+export async function missingCredentials(): Promise<MissingCredentials> {
+  try {
+    return (await lockedCheck?.()) === true ? 'locked' : 'not-signed-in'
+  } catch {
+    // A store that cannot be asked is not a reason to answer nothing at all.
+    return 'not-signed-in'
+  }
+}
+
 /**
- * Describes a failure.
+ * What to tell the user, for the failures they can do something about.
+ *
+ * The message from errors.ts says what happened. This says who has to act, and
+ * it is written for a model that will otherwise either try again in a loop or
+ * invent a remedy of its own. Two things it has to get across every time:
+ *
+ * - **The Bridge is a desktop application nobody here can start.** A model that
+ *   does not know this will keep retrying, or offer to start it.
+ * - **A rejected password is not a reason to ask for one in the chat.** The
+ *   Bridge generates a new password whenever an account is re-added, so this is
+ *   an ordinary event rather than a sign that something is broken.
+ */
+function remedyFor(remedy: BridgeRemedy, url: string | undefined): string | undefined {
+  const page = url ? `\n\nThe configuration page is at ${url}` : ''
+
+  switch (remedy) {
+    case 'unreachable':
+      return (
+        'Tell the user that Proton Mail Bridge does not appear to be reachable, and that they ' +
+        'have to start and unlock it themselves: it is a desktop application, and this server ' +
+        'can neither start it nor unlock it. Do not retry in a loop. If they say it is running, ' +
+        'the ports are the next thing to check, and those can be corrected on the configuration ' +
+        `page under Bridge.${page}`
+      )
+    case 'credentials':
+      return (
+        'Tell the user that the Bridge refused the stored password and that they need to enter ' +
+        'the current one. The Bridge shows it in the application under the account. Do not ask ' +
+        `for it in this conversation: the configuration page exists so that it never has to be.${page}`
+      )
+    case 'not-ready':
+      return (
+        'Tell the user the Bridge is reachable but not ready yet, which is what starting up and ' +
+        'being locked both look like. It passes once they have unlocked it. Waiting a moment and ' +
+        'trying once more is reasonable; repeating it without telling them is not.'
+      )
+    default:
+      return undefined
+  }
+}
+
+/**
+ * Describes a failure, and for the ones with a remedy says who has to act.
  *
  * Uses the SDK's own CallToolResult rather than a hand-written shape. Inventing a
  * type here cost me several attempts: the SDK resolves tool handlers against a
@@ -57,11 +130,16 @@ export function describeFailure(error: unknown, context: string): CallToolResult
   // elicitation is ever attempted. That was a real bug, hence this comment.
   if (error instanceof NotSignedInError) throw error
 
-  const text =
-    error instanceof BridgeError
-      ? error.message
-      : `Unexpected error while ${context}: ${String(error)}`
-  return { content: [{ type: 'text', text }], isError: true }
+  if (error instanceof BridgeError) {
+    const advice = remedyFor(error.remedy, signInUrl())
+    const text = advice ? `${error.message}\n\n${advice}` : error.message
+    return { content: [{ type: 'text', text }], isError: true }
+  }
+
+  return {
+    content: [{ type: 'text', text: `Unexpected error while ${context}: ${String(error)}` }],
+    isError: true,
+  }
 }
 
 /**
@@ -92,14 +170,15 @@ export async function withSignIn(
 
     const url = signInUrl()
     const attempt = priorAttempt(ctx)
+    const state = await missingCredentials()
 
     // Already been round once: report it rather than start over.
-    if (attempt !== 'none') return signInFailure(url, retryNote(attempt))
+    if (attempt !== 'none') return signInFailure(url, retryNote(attempt, state), state)
 
     // Nowhere to send them, or a client that cannot show a link. Either way the
     // address in the answer text is the best available move.
-    if (!url || !clientCanShowUrl(ctx)) return signInFailure(url)
+    if (!url || !clientCanShowUrl(ctx)) return signInFailure(url, undefined, state)
 
-    return signInElicitation(url)
+    return signInElicitation(url, state)
   }
 }

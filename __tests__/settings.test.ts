@@ -75,6 +75,26 @@ describe('loadSettings', () => {
     expect(settings).toEqual({ imapPort: 2143 })
     expect('bridgeHost' in settings).toBe(false)
   })
+
+  it('hides the unofficial notice only for a literal true', async () => {
+    writeFileSync(path, JSON.stringify({ noticeDismissed: true }))
+    expect(await loadSettings(path)).toEqual({ noticeDismissed: true })
+
+    // Anything else leaves a legal statement where it is. A hand-edited file
+    // saying "true" as a string should not count as having read it.
+    for (const value of ['true', 1, {}, 'yes']) {
+      writeFileSync(path, JSON.stringify({ noticeDismissed: value }))
+      expect(await loadSettings(path)).toEqual({})
+    }
+  })
+
+  it('keeps the notice and the ports in the same file', async () => {
+    // saveSettings replaces the file, so anything that writes one of these has
+    // to write both. Losing the ports by dismissing a paragraph would be a
+    // quiet way to break the connection.
+    writeFileSync(path, JSON.stringify({ imapPort: 2143, noticeDismissed: true }))
+    expect(await loadSettings(path)).toEqual({ imapPort: 2143, noticeDismissed: true })
+  })
 })
 
 describe('saveSettings', () => {

@@ -16,7 +16,15 @@ import type { Credentials, CredentialStore, StoreKind } from '../credentials/sto
 import { STORE_DESCRIPTIONS } from '../credentials/store.js'
 import { listStores, recommend, recommendationReason } from '../credentials/availability.js'
 import { createSession, checkRequest, csrfToken, securityHeaders, type SessionSecrets } from './security.js'
-import { loginPage, statusPage, rejectionPage, unlockPage, mailboxPage } from './pages.js'
+import { loginPage, rejectionPage, unlockPage } from './pages.js'
+import {
+  overviewSection,
+  bridgeSection,
+  credentialsSection,
+  activitySection,
+  mailboxSection,
+} from './sections.js'
+import type { Section, DisclaimerState } from './layout.js'
 
 /**
  * Upper bound for a request body.
@@ -28,6 +36,24 @@ const MAX_BODY_BYTES = 8 * 1024
 
 /** Only loopback. There is no option to change this, by design. */
 const BIND_ADDRESS = '127.0.0.1'
+
+/**
+ * Which address shows which section.
+ *
+ * One table rather than a chain of comparisons, so that a path nobody listed
+ * cannot quietly reach a renderer. Everything not in here falls through to the
+ * rejection at the end of the handler.
+ */
+const SECTION_PATHS: Record<string, Section | undefined> = {
+  '/': 'overview',
+  '/mailboxes': 'mailboxes',
+  '/bridge': 'bridge',
+  '/credentials': 'credentials',
+  '/activity': 'activity',
+}
+
+/** The same names as a set, for checking a section that arrived in a form. */
+const SECTIONS = new Set<string>(Object.values(SECTION_PATHS) as string[])
 
 /**
  * The port tried first.
@@ -91,6 +117,16 @@ export interface WebInterfaceOptions {
     running: Array<{ tool: string; forMs: number }>
     recent: Array<{ tool: string; at: number; durationMs: number; outcome: 'ok' | 'failed' }>
   }
+  /**
+   * Whether the "not affiliated with Proton" notice was sent away already.
+   *
+   * Absent means it is shown without a way to dismiss it, which is the safe
+   * direction: a legal statement should not vanish because a caller left a
+   * handler out.
+   */
+  noticeDismissed?: () => boolean
+  /** Remembers a dismissal. Without it the notice has no button. */
+  onDismissNotice?: () => Promise<void>
   /** Where notices go. stderr, never stdout, which carries the MCP protocol. */
   notify?: (message: string) => void
 }
@@ -113,7 +149,11 @@ export interface StatusSnapshot {
   certificate?: { fingerprint: string; subject: string; firstSeen: string }
   bridgeHost: string
   bridgeImapPort: number
-  bridgeSmtpPort?: number
+  /**
+   * Required, not optional. It used to fall back to 0, which is not a port:
+   * the advanced block would prefill a value the same form then refused.
+   */
+  bridgeSmtpPort: number
   readOnly?: boolean
   uptimeMs?: number
 }
@@ -333,12 +373,15 @@ export class WebInterface {
       return
     }
 
-    if (method === 'GET' && path === '/') {
-      await this.#renderEntry(response)
-      return
+    if (method === 'GET') {
+      const section = SECTION_PATHS[path]
+      if (section) {
+        await this.#render(section, response)
+        return
+      }
     }
-    if (method === 'GET' && path === '/mailboxes') {
-      await this.#renderMailboxes(response)
+    if (writing && path === '/dismiss-notice') {
+      await this.#handleDismissNotice(response, body.fields)
       return
     }
     if (writing && path === '/settings') {
@@ -353,22 +396,20 @@ export class WebInterface {
       await this.#handleSignIn(response, body.fields)
       return
     }
-    if (writing && path === '/choose-store') {
-      await this.#handleChooseStore(response, body.fields)
-      return
-    }
     if (writing && path === '/unlock') {
       await this.#handleUnlock(response, body.fields)
       return
     }
     if (writing && path === '/discard-encrypted') {
       await this.#options.onDiscardEncrypted?.()
-      await this.#renderEntry(response)
+      // Both of these end with nobody signed in, so the section asked for is
+      // beside the point: #render lands on the sign-in form either way.
+      await this.#render('overview', response)
       return
     }
     if (writing && path === '/sign-out') {
       await this.#options.onSignOut()
-      await this.#renderEntry(response)
+      await this.#render('overview', response)
       return
     }
 
@@ -376,25 +417,35 @@ export class WebInterface {
   }
 
   /**
-   * Shows whichever of the three pages fits the current state.
+   * Renders one section, or whichever page the current state demands instead.
    *
-   * The state decides, not the caller: signed in leads to the status page,
-   * stored-but-locked to the unlock page, and nothing stored to the sign-in
-   * form. An error message follows along to whichever page that turns out to
-   * be, which is what puts a wrong master password on the unlock page and a
-   * refused Bridge login on the sign-in form without either having to say so.
+   * The state outranks the request: stored-but-locked leads to the unlock page
+   * and nothing stored to the sign-in form, whichever section was asked for.
+   * That is what puts a wrong master password on the unlock page and a refused
+   * Bridge login on the sign-in form without either having to say so, and it is
+   * also why no section has to check whether anybody is signed in.
    */
-  async #renderEntry(
+  async #render(
+    section: Section,
     response: ServerResponse,
-    error?: string,
-    address?: string,
-    notice?: string,
+    outcome: {
+      error?: string
+      notice?: string
+      address?: string
+      store?: StoreKind
+      /** Opens the advanced block, so a rejected port is where the eye lands. */
+      showAdvanced?: boolean
+    } = {},
   ): Promise<void> {
+    const { error, notice, address, store, showAdvanced } = outcome
     const status = await this.#options.getStatus()
+    const token = this.#secrets.accessToken
+    const disclaimer = this.#disclaimerFor(section)
 
     if (!status.connected && status.locked) {
       const page = unlockPage({
-        token: this.#secrets.accessToken,
+        token,
+        disclaimer,
         csrf: csrfToken(this.#secrets, '/unlock'),
         csrfDiscard: csrfToken(this.#secrets, '/discard-encrypted'),
         path: status.encryptedPath ?? 'your user directory',
@@ -404,198 +455,340 @@ export class WebInterface {
       return
     }
 
-    if (status.connected) {
-      const activity = this.#options.getActivity?.() ?? { running: [], recent: [] }
-      const page = statusPage({
-        token: this.#secrets.accessToken,
-        csrfSignOut: csrfToken(this.#secrets, '/sign-out'),
-        csrfSettings: csrfToken(this.#secrets, '/settings'),
-        csrfTest: csrfToken(this.#secrets, '/test-connection'),
-        connected: true,
-        ...(status.address ? { address: status.address } : {}),
-        ...(status.storeKind
-          ? { storeKind: status.storeKind, storeTitle: STORE_DESCRIPTIONS[status.storeKind].title }
-          : {}),
-        ...(status.mailboxCount !== undefined ? { mailboxCount: status.mailboxCount } : {}),
-        ...(status.messageCount !== undefined ? { messageCount: status.messageCount } : {}),
-        ...(status.unseenCount !== undefined ? { unseenCount: status.unseenCount } : {}),
-        ...(status.certificate ? { certificate: status.certificate } : {}),
+    if (!status.connected) {
+      const stores = await listStores()
+      const page = loginPage({
+        token,
+        disclaimer,
+        csrf: csrfToken(this.#secrets, '/sign-in'),
+        stores,
+        suggested: recommend(stores),
+        suggestionReason: recommendationReason(stores),
         bridgeHost: status.bridgeHost,
         bridgeImapPort: status.bridgeImapPort,
-        bridgeSmtpPort: status.bridgeSmtpPort ?? 0,
-        // No handler means the ports are not ours to change.
+        bridgeSmtpPort: status.bridgeSmtpPort,
         portsLocked: this.#options.onPorts === undefined,
-        readOnly: status.readOnly === true,
-        webPort: this.#port,
-        uptimeMs: status.uptimeMs ?? 0,
-        running: activity.running,
-        recent: activity.recent,
+        ...(store ? { chosen: store } : {}),
         ...(error ? { error } : {}),
-        ...(notice ? { notice } : {}),
+        ...(address ? { address } : {}),
+        ...(showAdvanced ? { showAdvanced } : {}),
       })
       this.#send(response, 200, 'text/html; charset=utf-8', page)
       return
     }
 
-    const stores = await listStores()
-    const page = loginPage({
-      token: this.#secrets.accessToken,
-      csrf: csrfToken(this.#secrets, '/sign-in'),
-      csrfChooseStore: csrfToken(this.#secrets, '/choose-store'),
-      stores,
-      suggested: recommend(stores),
-      suggestionReason: recommendationReason(stores),
-      ...(this.#chosenStore ? { chosen: this.#chosenStore } : {}),
+    const banners = {
+      disclaimer,
       ...(error ? { error } : {}),
-      ...(address ? { address } : {}),
-    })
+      ...(notice ? { notice } : {}),
+    }
+    const storeTitle = status.storeKind
+      ? { storeTitle: STORE_DESCRIPTIONS[status.storeKind].title }
+      : {}
+
+    let page: string
+    switch (section) {
+      case 'mailboxes':
+        page = await this.#renderMailboxes(token, banners)
+        break
+
+      case 'bridge':
+        page = bridgeSection({
+          token,
+          csrfSettings: csrfToken(this.#secrets, '/settings'),
+          csrfTest: csrfToken(this.#secrets, '/test-connection'),
+          bridgeHost: status.bridgeHost,
+          bridgeImapPort: status.bridgeImapPort,
+          bridgeSmtpPort: status.bridgeSmtpPort,
+          // No handler means the ports are not ours to change.
+          portsLocked: this.#options.onPorts === undefined,
+          ...(status.certificate ? { certificate: status.certificate } : {}),
+          ...banners,
+        })
+        break
+
+      case 'credentials':
+        page = credentialsSection({
+          token,
+          csrfSignOut: csrfToken(this.#secrets, '/sign-out'),
+          ...(status.address ? { address: status.address } : {}),
+          ...(status.storeKind ? { storeKind: status.storeKind } : {}),
+          ...storeTitle,
+          ...banners,
+        })
+        break
+
+      case 'activity': {
+        const activity = this.#options.getActivity?.() ?? { running: [], recent: [] }
+        page = activitySection({ token, ...activity, ...banners })
+        break
+      }
+
+      default:
+        page = overviewSection({
+          token,
+          connected: true,
+          ...(status.address ? { address: status.address } : {}),
+          ...storeTitle,
+          ...(status.mailboxCount !== undefined ? { mailboxCount: status.mailboxCount } : {}),
+          ...(status.messageCount !== undefined ? { messageCount: status.messageCount } : {}),
+          ...(status.unseenCount !== undefined ? { unseenCount: status.unseenCount } : {}),
+          bridgeHost: status.bridgeHost,
+          bridgeImapPort: status.bridgeImapPort,
+          bridgeSmtpPort: status.bridgeSmtpPort,
+          readOnly: status.readOnly === true,
+          webPort: this.#port,
+          uptimeMs: status.uptimeMs ?? 0,
+          ...banners,
+        })
+    }
+
     this.#send(response, 200, 'text/html; charset=utf-8', page)
   }
 
-  #chosenStore: StoreKind | undefined
-
-  async #handleChooseStore(response: ServerResponse, fields: Record<string, string>): Promise<void> {
-    const kind = fields.kind as StoreKind | undefined
-    if (!kind || !(kind in STORE_DESCRIPTIONS)) {
-      await this.#renderEntry(response, 'That storage option does not exist.')
-      return
-    }
-    const stores = await listStores()
-    const chosen = stores.find((s) => s.kind === kind)
-    if (!chosen?.available) {
-      await this.#renderEntry(
-        response,
-        `${STORE_DESCRIPTIONS[kind].title} cannot be used on this machine. ${chosen?.reason ?? ''}`,
-      )
-      return
-    }
-    this.#chosenStore = kind
-    await this.#renderEntry(response)
+  /**
+   * Whether the notice is shown, and whether it carries a button.
+   *
+   * A server wired without a way to remember the dismissal still shows the
+   * notice, just without the button. Silently dropping it because a handler is
+   * missing would be the one outcome nobody wants.
+   */
+  #disclaimerFor(section: Section): DisclaimerState {
+    if (this.#options.noticeDismissed?.() === true) return 'dismissed'
+    if (!this.#options.onDismissNotice) return 'plain'
+    return { csrf: csrfToken(this.#secrets, '/dismiss-notice'), from: section }
   }
+
+  /**
+   * Sends the notice away for good.
+   *
+   * The section it was dismissed from travels in the form, so the answer is the
+   * page the user was already on rather than a jump back to the overview. An
+   * unknown value falls back to the overview instead of being trusted.
+   */
+  async #handleDismissNotice(
+    response: ServerResponse,
+    fields: Record<string, string>,
+  ): Promise<void> {
+    await this.#options.onDismissNotice?.()
+    const from = SECTIONS.has(fields.from ?? '') ? (fields.from as Section) : 'overview'
+    await this.#render(from, response)
+  }
+
 
   /**
    * The folders and labels, only ever on this page.
    *
-   * Never folded into the status page: these names belong to the whole Proton
-   * account and give away banks, employers and authorities on their own.
+   * Never folded into another section: these names belong to the whole Proton
+   * account and give away banks, employers and authorities on their own. The
+   * caller has already established that somebody is signed in, so the only
+   * question left here is whether the Bridge answers.
    */
-  async #renderMailboxes(response: ServerResponse): Promise<void> {
-    const status = await this.#options.getStatus()
-    if (!status.connected || !this.#options.getMailboxes) {
-      // Nothing to show, and no reason to hint at what would be there.
-      await this.#renderEntry(response)
-      return
-    }
-
+  async #renderMailboxes(
+    token: string,
+    banners: { error?: string; notice?: string; disclaimer: DisclaimerState },
+  ): Promise<string> {
     let mailboxes: Awaited<ReturnType<NonNullable<WebInterfaceOptions['getMailboxes']>>> = []
-    let error: string | undefined
-    try {
-      mailboxes = await this.#options.getMailboxes()
-    } catch (failure) {
-      error = (failure as Error).message
+    let error: string | undefined = banners.error
+    if (this.#options.getMailboxes) {
+      try {
+        mailboxes = await this.#options.getMailboxes()
+      } catch (failure) {
+        error = (failure as Error).message
+      }
     }
 
-    const page = mailboxPage({
-      token: this.#secrets.accessToken,
+    return mailboxSection({
+      token,
       mailboxes,
+      disclaimer: banners.disclaimer,
       ...(error ? { error } : {}),
+      ...(banners.notice ? { notice: banners.notice } : {}),
     })
-    this.#send(response, 200, 'text/html; charset=utf-8', page)
   }
 
-  async #handlePorts(response: ServerResponse, fields: Record<string, string>): Promise<void> {
-    if (!this.#options.onPorts) {
-      await this.#renderEntry(response, 'The ports are set through the environment on this server.')
-      return
-    }
-
+  /**
+   * Reads a pair of ports out of a form.
+   *
+   * One place for it, because two forms carry them now: the bridge section and
+   * the advanced block of the sign-in page. A port that is wrong has to be
+   * caught before anything tries to connect with it, or the answer is
+   * "connection refused" and the cause is invisible.
+   */
+  static #readPorts(
+    fields: Record<string, string>,
+  ): { ports: { imapPort: number; smtpPort: number } } | { error: string } {
     const parsed: Record<'imapPort' | 'smtpPort', number> = { imapPort: 0, smtpPort: 0 }
     for (const field of ['imapPort', 'smtpPort'] as const) {
       const raw = (fields[field] ?? '').trim()
       const value = Number(raw)
       if (!raw || !Number.isInteger(value) || value < 1 || value > 65535) {
-        await this.#renderEntry(
-          response,
-          `"${raw}" is not a usable port for ${field === 'imapPort' ? 'IMAP' : 'SMTP'}. ` +
+        return {
+          error:
+            `"${raw}" is not a usable port for ${field === 'imapPort' ? 'IMAP' : 'SMTP'}. ` +
             'Expected a whole number between 1 and 65535.',
-        )
-        return
+        }
       }
       parsed[field] = value
     }
+    return { ports: parsed }
+  }
+
+  async #handlePorts(response: ServerResponse, fields: Record<string, string>): Promise<void> {
+    if (!this.#options.onPorts) {
+      await this.#render('bridge', response, {
+        error: 'The ports are set through the environment on this server.',
+      })
+      return
+    }
+
+    const read = WebInterface.#readPorts(fields)
+    if ('error' in read) {
+      await this.#render('bridge', response, { error: read.error })
+      return
+    }
+    const parsed = read.ports
 
     const error = await this.#options.onPorts(parsed)
-    await this.#renderEntry(
-      response,
-      error,
-      undefined,
-      error ? undefined : `Ports saved: IMAP ${parsed.imapPort}, SMTP ${parsed.smtpPort}.`,
-    )
+    await this.#render('bridge', response, {
+      ...(error
+        ? { error }
+        : { notice: `Ports saved: IMAP ${parsed.imapPort}, SMTP ${parsed.smtpPort}.` }),
+    })
   }
 
   async #handleTest(response: ServerResponse): Promise<void> {
     if (!this.#options.onTest) {
-      await this.#renderEntry(response, 'This server cannot test the connection.')
+      await this.#render('bridge', response, { error: 'This server cannot test the connection.' })
       return
     }
     const result = await this.#options.onTest()
-    await this.#renderEntry(
-      response,
-      result.ok ? undefined : result.message,
-      undefined,
-      result.ok ? result.message : undefined,
+    await this.#render('bridge', response,
+      result.ok ? { notice: result.message } : { error: result.message },
     )
   }
 
   async #handleUnlock(response: ServerResponse, fields: Record<string, string>): Promise<void> {
     const master = fields.master ?? ''
     if (!master) {
-      await this.#renderEntry(response, 'The master password is required.')
+      await this.#render('overview', response, { error: 'The master password is required.' })
       return
     }
     if (!this.#options.onUnlock) {
-      await this.#renderEntry(response, 'This server cannot open encrypted credential files.')
+      await this.#render('overview', response, {
+        error: 'This server cannot open encrypted credential files.',
+      })
       return
     }
     const error = await this.#options.onUnlock(master)
-    await this.#renderEntry(response, error)
+    await this.#render('overview', response, { ...(error ? { error } : {}) })
+  }
+
+  /**
+   * Reads the storage option out of the form.
+   *
+   * It arrives as a radio value now rather than being remembered from an
+   * earlier post, so it is ordinary untrusted input: a name that is not one of
+   * the four, or one that cannot work on this machine, falls back to the
+   * recommendation rather than being passed on.
+   */
+  async #storeFromForm(
+    fields: Record<string, string>,
+  ): Promise<{ store: StoreKind; error?: string }> {
+    const stores = await listStores()
+    const wanted = fields.store
+    if (!wanted || !(wanted in STORE_DESCRIPTIONS)) return { store: recommend(stores) }
+
+    const kind = wanted as StoreKind
+    const entry = stores.find((s) => s.kind === kind)
+    if (!entry?.available) {
+      return {
+        store: recommend(stores),
+        error: `${STORE_DESCRIPTIONS[kind].title} cannot be used on this machine. ${entry?.reason ?? ''}`,
+      }
+    }
+    return { store: kind }
   }
 
   async #handleSignIn(response: ServerResponse, fields: Record<string, string>): Promise<void> {
     const address = (fields.address ?? '').trim()
     const password = fields.password ?? ''
+    const { store, error: storeError } = await this.#storeFromForm(fields)
 
-    if (!address || !password) {
-      await this.#renderEntry(response, 'Both the address and the Bridge password are required.', address)
+    if (storeError) {
+      await this.#render('overview', response, { error: storeError, address, store })
       return
     }
 
-    const stores = await listStores()
-    const store = this.#chosenStore ?? recommend(stores)
+    // The ports come first, before the credentials are tried. Somebody whose
+    // Bridge listens elsewhere would otherwise be told their password is wrong,
+    // because the attempt went to a port with nothing behind it. Only when the
+    // form carries them: the block is read-only when the environment decided.
+    if (this.#options.onPorts && fields.imapPort !== undefined) {
+      const read = WebInterface.#readPorts(fields)
+      if ('error' in read) {
+        await this.#render('overview', response, {
+          error: read.error,
+          address,
+          store,
+          showAdvanced: true,
+        })
+        return
+      }
+      const failed = await this.#options.onPorts(read.ports)
+      if (failed) {
+        await this.#render('overview', response, {
+          error: failed,
+          address,
+          store,
+          showAdvanced: true,
+        })
+        return
+      }
+    }
+
+    if (!address || !password) {
+      await this.#render('overview', response, {
+        error: 'Both the address and the Bridge password are required.',
+        address,
+        store,
+      })
+      return
+    }
 
     // Checked here rather than in the session, because this is where the second
     // field exists to compare against. A typo in a password nothing can recover
     // has to be caught before it is used to encrypt anything.
+    //
+    // Read only for the store that uses it. The field is in the document for
+    // every option now, hidden by CSS, so a value left behind by switching
+    // options would otherwise be taken for a choice.
     let master: string | undefined
     if (store === 'encrypted-file') {
       master = fields.master ?? ''
       if (!master) {
-        await this.#renderEntry(
-          response,
-          'The encrypted file needs a master password to encrypt the credentials with.',
+        await this.#render('overview', response, {
+          error: 'The encrypted file needs a master password to encrypt the credentials with.',
           address,
-        )
+          store,
+        })
         return
       }
       if (master !== (fields.masterRepeat ?? '')) {
-        await this.#renderEntry(response, 'The two master passwords do not match.', address)
+        await this.#render('overview', response, {
+          error: 'The two master passwords do not match.',
+          address,
+          store,
+        })
         return
       }
     }
 
     const error = await this.#options.onSignIn({ user: address, pass: password }, store, master)
     // No password is kept anywhere in this class, whatever the outcome.
-    await this.#renderEntry(response, error, error ? address : undefined)
+    await this.#render('overview', response, {
+      ...(error ? { error, address, store } : {}),
+    })
   }
 }
 

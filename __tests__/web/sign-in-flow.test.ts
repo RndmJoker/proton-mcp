@@ -24,19 +24,25 @@ let state: State
 let signIns: Array<{ user: string; pass: string; store: StoreKind; master?: string }>
 let unlocks: string[]
 let discards: number
+let ports: Array<{ imapPort: number; smtpPort: number }>
 /** Set to make the next sign-in or unlock fail, as a wrong password would. */
 let failWith: string | undefined
+/** Set to make saving the ports fail, as an unwritable settings file would. */
+let portFailure: string | undefined
 
-beforeEach(async () => {
-  state = { connected: false, locked: false }
-  signIns = []
-  unlocks = []
-  discards = 0
-  failWith = undefined
-
-  web = new WebInterface({
+function build(options: { allowPorts?: boolean } = {}): WebInterface {
+  return new WebInterface({
     // A free port: the fixed default would make these tests fight each other.
     port: 0,
+    ...(options.allowPorts === false
+      ? {}
+      : {
+          onPorts: async (p) => {
+            if (portFailure) return portFailure
+            ports.push(p)
+            return undefined
+          },
+        }),
     onSignIn: async (credentials, store, master) => {
       if (failWith) return failWith
       signIns.push({ ...credentials, store, ...(master ? { master } : {}) })
@@ -64,10 +70,23 @@ beforeEach(async () => {
       encryptedPath: '/home/someone/.config/proton-mcp/credentials.enc',
       bridgeHost: '127.0.0.1',
       bridgeImapPort: 1143,
+      bridgeSmtpPort: 1025,
       ...(state.connected ? { address: 'someone@example.com' } : {}),
     }),
     notify: () => undefined,
   })
+}
+
+beforeEach(async () => {
+  state = { connected: false, locked: false }
+  signIns = []
+  unlocks = []
+  discards = 0
+  ports = []
+  failWith = undefined
+  portFailure = undefined
+
+  web = build()
   token = new URL(await web.start()).searchParams.get('token') ?? ''
 })
 
@@ -125,57 +144,139 @@ function csrfFrom(body: string, action: string): string {
 }
 
 describe('choosing where the password is kept', () => {
-  it('shows which option is selected', async () => {
-    const first = await send(`/?token=${token}`)
-    // Nothing chosen yet: the suggestion is marked as selected so the form
-    // never claims a destination the user did not see.
-    expect(first.body).toContain('Will be kept in:')
-
-    const chosen = await send(`/choose-store?token=${token}`, {
-      csrf: csrfFrom(first.body, '/choose-store'),
-      kind: 'plain-file',
-    })
-    expect(chosen.status).toBe(200)
-    expect(chosen.body).toContain('selected')
-    expect(chosen.body).toContain('Plain file')
+  it('offers every option as a radio in the one form', async () => {
+    // Choosing used to post and re-render. Everything now travels with the
+    // credentials, so picking an option costs no round trip at all.
+    const { body } = await send(`/?token=${token}`)
+    for (const kind of ['keyring', 'encrypted-file', 'session', 'plain-file']) {
+      expect(body).toContain(`name="store" id="store-${kind}" value="${kind}"`)
+    }
+    expect(body).not.toContain('/choose-store')
   })
 
-  it('asks for a master password once the encrypted file is chosen', async () => {
-    const first = await send(`/?token=${token}`)
-    const chosen = await send(`/choose-store?token=${token}`, {
-      csrf: csrfFrom(first.body, '/choose-store'),
-      kind: 'encrypted-file',
-    })
-    // The field that was missing entirely, which made this option unusable.
-    expect(chosen.body).toContain('name="master"')
-    expect(chosen.body).toContain('name="masterRepeat"')
-    expect(chosen.body).toContain('if you forget it')
+  it('preselects exactly one option', async () => {
+    // Which one depends on the machine, because listStores probes the real
+    // keyring here. That exactly one radio is checked does not: a form with
+    // none checked would submit no store at all, and one with two is invalid.
+    const { body } = await send(`/?token=${token}`)
+    const checked = body.match(/<input type="radio"[^>]*\schecked/g) ?? []
+    expect(checked).toHaveLength(1)
   })
 
-  it('does not ask for a master password for the other stores', async () => {
+  it('carries the master password fields for every option', async () => {
+    // In the document always, shown by CSS for the one store that uses them.
+    // Rendering them only for that store is what forced the reload.
+    const { body } = await send(`/?token=${token}`)
+    expect(body).toContain('name="master"')
+    expect(body).toContain('name="masterRepeat"')
+    expect(body).toContain('if you forget it')
+    expect(body).toContain('class="master-fields"')
+  })
+
+  it('carries the plain file warning, closable and not a refusal', async () => {
+    const { body } = await send(`/?token=${token}`)
+    expect(body).toContain('class="warning-layer"')
+    expect(body).toContain('The password will be readable')
+    expect(body).toContain('for="warning-seen"')
+    // The option itself stays selectable: the warning informs, it does not veto.
+    expect(body).not.toContain('id="store-plain-file" value="plain-file" disabled')
+  })
+
+  it('refuses an option that does not exist', async () => {
+    // The choice is form input now, so a name nobody offered is ordinary
+    // untrusted data. It falls back to the recommendation rather than being
+    // handed to the session.
     const first = await send(`/?token=${token}`)
-    const chosen = await send(`/choose-store?token=${token}`, {
-      csrf: csrfFrom(first.body, '/choose-store'),
-      kind: 'session',
+    const res = await send(`/sign-in?token=${token}`, {
+      csrf: csrfFrom(first.body, '/sign-in'),
+      store: 'somewhere-else',
+      address: 'someone@example.com',
+      password: 'bridge-password',
+      // Supplied so the encrypted file is not turned away for a missing one;
+      // which store gets recommended depends on the machine.
+      master: 'my-master',
+      masterRepeat: 'my-master',
     })
-    expect(chosen.body).not.toContain('name="master"')
+    expect(res.status).toBe(200)
+    expect(signIns).toHaveLength(1)
+    expect(['keyring', 'encrypted-file', 'session', 'plain-file']).toContain(signIns[0]?.store)
+    expect(signIns[0]?.user).toBe('someone@example.com')
+  })
+})
+
+describe('the advanced block on the sign-in page', () => {
+  it('is folded away and prefilled with what the server will use', async () => {
+    const { body } = await send(`/?token=${token}`)
+    expect(body).toContain('<details class="card advanced">')
+    // Not open: almost nobody needs it, and it must not be the first thing read.
+    expect(body).not.toContain('<details class="card advanced" open>')
+    expect(body).toContain('id="imapPort" name="imapPort" type="text" inputmode="numeric"\n         value="1143"')
+    expect(body).toContain('value="1025"')
+  })
+
+  it('shows the Bridge address without letting it be changed', async () => {
+    // A wrong port means nothing works and you notice. A wrong address means
+    // the Bridge password goes to another machine and nobody notices.
+    const { body } = await send(`/?token=${token}`)
+    expect(body).toContain('value="127.0.0.1" disabled')
+    expect(body).not.toContain('name="host"')
+    expect(body).not.toContain('name="bridgeHost"')
+  })
+
+  it('saves the ports before the credentials are tried', async () => {
+    // Otherwise a Bridge listening elsewhere reports a wrong password, because
+    // the attempt went to a port with nothing behind it.
+    const first = await send(`/?token=${token}`)
+    await send(`/sign-in?token=${token}`, {
+      csrf: csrfFrom(first.body, '/sign-in'),
+      store: 'session',
+      address: 'someone@example.com',
+      password: 'bridge-password',
+      imapPort: '2143',
+      smtpPort: '2025',
+    })
+    expect(ports).toEqual([{ imapPort: 2143, smtpPort: 2025 }])
+    expect(signIns).toHaveLength(1)
+  })
+
+  it('refuses a port that is not one, and opens the block', async () => {
+    const first = await send(`/?token=${token}`)
+    const res = await send(`/sign-in?token=${token}`, {
+      csrf: csrfFrom(first.body, '/sign-in'),
+      store: 'session',
+      address: 'someone@example.com',
+      password: 'bridge-password',
+      imapPort: '70000',
+      smtpPort: '1025',
+    })
+    expect(res.body).toContain('not a usable port')
+    expect(res.body).toContain('<details class="card advanced" open>')
+    // Nothing was tried with a port that cannot work.
+    expect(ports).toEqual([])
+    expect(signIns).toHaveLength(0)
+  })
+
+  it('shows the ports as text when the environment set them', async () => {
+    await web.stop()
+    web = build({ allowPorts: false })
+    token = new URL(await web.start()).searchParams.get('token') ?? ''
+    const { body } = await send(`/?token=${token}`)
+    expect(body).toContain('come from the environment')
+    expect(body).not.toContain('name="imapPort"')
   })
 })
 
 describe('signing in with an encrypted file', () => {
   async function chooseEncrypted(): Promise<string> {
     const first = await send(`/?token=${token}`)
-    const chosen = await send(`/choose-store?token=${token}`, {
-      csrf: csrfFrom(first.body, '/choose-store'),
-      kind: 'encrypted-file',
-    })
-    return csrfFrom(chosen.body, '/sign-in')
+    return csrfFrom(first.body, '/sign-in')
   }
 
   it('passes the master password through', async () => {
     const signInCsrf = await chooseEncrypted()
     const res = await send(`/sign-in?token=${token}`, {
       csrf: signInCsrf,
+      store: 'encrypted-file',
       address: 'someone@example.com',
       password: 'bridge-password',
       master: 'my-master',
@@ -196,6 +297,7 @@ describe('signing in with an encrypted file', () => {
     const signInCsrf = await chooseEncrypted()
     const res = await send(`/sign-in?token=${token}`, {
       csrf: signInCsrf,
+      store: 'encrypted-file',
       address: 'someone@example.com',
       password: 'bridge-password',
       master: 'my-master',
@@ -211,6 +313,7 @@ describe('signing in with an encrypted file', () => {
     const signInCsrf = await chooseEncrypted()
     const res = await send(`/sign-in?token=${token}`, {
       csrf: signInCsrf,
+      store: 'encrypted-file',
       address: 'someone@example.com',
       password: 'bridge-password',
     })
@@ -223,6 +326,7 @@ describe('signing in with an encrypted file', () => {
     const signInCsrf = await chooseEncrypted()
     const res = await send(`/sign-in?token=${token}`, {
       csrf: signInCsrf,
+      store: 'encrypted-file',
       address: 'someone@example.com',
       password: 'bridge-password',
       master: 'my-master',
@@ -256,14 +360,14 @@ describe('unlocking a stored encrypted file', () => {
     expect(res.body).toContain('/home/someone/.config/proton-mcp/credentials.enc')
   })
 
-  it('unlocks with the right password and lands on the status page', async () => {
+  it('unlocks with the right password and lands on the overview', async () => {
     const page = await send(`/?token=${token}`)
     const res = await send(`/unlock?token=${token}`, {
       csrf: csrfFrom(page.body, '/unlock'),
       master: 'my-master',
     })
     expect(unlocks).toEqual(['my-master'])
-    expect(res.body).toContain('Status')
+    expect(res.body).toContain('Overview')
     expect(res.body).toContain('someone@example.com')
   })
 
@@ -330,6 +434,7 @@ describe('a browser-shaped request', () => {
     const page = await send(`/?token=${token}`)
     const res = await send(`/sign-in?token=${token}`, {
       csrf: csrfFrom(page.body, '/sign-in'),
+      store: 'encrypted-file',
       address: 'someone@example.com',
       password: 'bridge-password',
       master: 'my-master',
