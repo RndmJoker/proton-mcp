@@ -19,6 +19,7 @@ import {
   retryNote,
   signInElicitation,
   signInFailure,
+  type MissingCredentials,
 } from './sign-in-required.js'
 
 /**
@@ -33,14 +34,44 @@ export function setSignInHint(hint: () => string | undefined): void {
   signInHint = hint
 }
 
+/**
+ * Whether the stored credentials are merely locked.
+ *
+ * Separate from the address because it is a different question with a different
+ * answer for the user. Missing credentials mean fetching the Bridge password;
+ * locked ones mean typing the master password the user chose themselves.
+ * Telling somebody to do the first when they need the second is how an
+ * encrypted file ends up being thrown away.
+ *
+ * Absent means not locked, which is the safe direction: the sign-in message
+ * names both the address and the password, so it is merely more than needed
+ * rather than wrong.
+ */
+let lockedCheck: (() => Promise<boolean>) | undefined
+
+export function setLockedCheck(check: () => Promise<boolean>): void {
+  lockedCheck = check
+}
+
 /** For tests, which must not inherit a hint from another test. */
 export function _clearSignInHint(): void {
   signInHint = undefined
+  lockedCheck = undefined
 }
 
 /** The sign-in address, when the interface is running. */
 export function signInUrl(): string | undefined {
   return signInHint?.()
+}
+
+/** Which of the two situations the caller is in. */
+export async function missingCredentials(): Promise<MissingCredentials> {
+  try {
+    return (await lockedCheck?.()) === true ? 'locked' : 'not-signed-in'
+  } catch {
+    // A store that cannot be asked is not a reason to answer nothing at all.
+    return 'not-signed-in'
+  }
 }
 
 /**
@@ -92,14 +123,15 @@ export async function withSignIn(
 
     const url = signInUrl()
     const attempt = priorAttempt(ctx)
+    const state = await missingCredentials()
 
     // Already been round once: report it rather than start over.
-    if (attempt !== 'none') return signInFailure(url, retryNote(attempt))
+    if (attempt !== 'none') return signInFailure(url, retryNote(attempt, state), state)
 
     // Nowhere to send them, or a client that cannot show a link. Either way the
     // address in the answer text is the best available move.
-    if (!url || !clientCanShowUrl(ctx)) return signInFailure(url)
+    if (!url || !clientCanShowUrl(ctx)) return signInFailure(url, undefined, state)
 
-    return signInElicitation(url)
+    return signInElicitation(url, state)
   }
 }

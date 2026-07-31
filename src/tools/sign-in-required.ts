@@ -63,6 +63,31 @@ const MESSAGE =
   'the Proton address together with the Bridge password, which is the one the Bridge generates ' +
   'and not the Proton account password.'
 
+/**
+ * The other reason a tool finds no credentials: they are on disk, encrypted.
+ *
+ * A separate message because the remedy is a different one, and the message
+ * above sends the user to the wrong place entirely. Nothing has to be looked up
+ * in the Bridge and no address has to be typed: the Bridge password is already
+ * stored, and the one thing missing is the master password that decrypts it,
+ * which is asked for once per start and never kept.
+ *
+ * Telling somebody to fetch their Bridge password when all they need is the
+ * password they chose themselves is the kind of wrong advice that ends with the
+ * encrypted file being thrown away.
+ */
+const LOCKED_MESSAGE =
+  'proton-mcp has credentials stored, in an encrypted file that is not open yet. It needs the ' +
+  'master password that was chosen when they were saved. Nothing else is missing: the Bridge ' +
+  'password is already on disk, and no address has to be entered again.'
+
+/** Which of the two situations a caller is in. */
+export type MissingCredentials = 'not-signed-in' | 'locked'
+
+function messageFor(state: MissingCredentials): string {
+  return state === 'locked' ? LOCKED_MESSAGE : MESSAGE
+}
+
 /** The parts of the tool context this module reads. */
 interface SignInContext {
   mcpReq?: {
@@ -91,14 +116,40 @@ export function clientCanShowUrl(ctx: unknown): boolean {
 }
 
 /** The failure used when elicitation is unavailable, declined or fruitless. */
-export function signInFailure(url: string | undefined, note?: string): CallToolResult {
-  const head = note ? `${note}\n\n${MESSAGE}` : MESSAGE
-  const text = url
-    ? `${head}\n\nOpen ${url}\n\nTell the user to open it and sign in there. Do not ask for the ` +
-      'password in this conversation.'
-    : `${head}\n\nThe configuration page is not running. Set BRIDGE_USER and BRIDGE_PASS in the ` +
-      'environment instead. Do not ask for the password in this conversation.'
-  return { content: [{ type: 'text', text }], isError: true }
+export function signInFailure(
+  url: string | undefined,
+  note?: string,
+  state: MissingCredentials = 'not-signed-in',
+): CallToolResult {
+  const message = messageFor(state)
+  const head = note ? `${note}\n\n${message}` : message
+
+  if (!url) {
+    // No page to send anyone to. For a locked file that is a dead end worth
+    // naming as one: the master password can only be entered there.
+    const text =
+      state === 'locked'
+        ? `${head}\n\nThe configuration page is not running, so the file cannot be unlocked right ` +
+          'now. It failed to start, most likely because its port was in use; setting ' +
+          'PROTON_MCP_WEB_PORT to a free port and restarting is the way out. Do not ask for the ' +
+          'master password in this conversation.'
+        : `${head}\n\nThe configuration page is not running. Set BRIDGE_USER and BRIDGE_PASS in ` +
+          'the environment instead. Do not ask for the password in this conversation.'
+    return { content: [{ type: 'text', text }], isError: true }
+  }
+
+  const instruction =
+    state === 'locked'
+      ? 'Tell the user to open it and enter their master password there. Do not ask for the ' +
+        'master password in this conversation: it is the one thing that can decrypt the stored ' +
+        'credentials, and it has no business in a transcript.'
+      : 'Tell the user to open it and sign in there. Do not ask for the password in this ' +
+        'conversation.'
+
+  return {
+    content: [{ type: 'text', text: `${head}\n\nOpen ${url}\n\n${instruction}` }],
+    isError: true,
+  }
 }
 
 /**
@@ -107,10 +158,13 @@ export function signInFailure(url: string | undefined, note?: string): CallToolR
  * Returned from the handler, not sent. See the note at the top of this file for
  * why that is the only thing that can work here.
  */
-export function signInElicitation(url: string): InputRequiredResult {
+export function signInElicitation(
+  url: string,
+  state: MissingCredentials = 'not-signed-in',
+): InputRequiredResult {
   return inputRequired({
     inputRequests: {
-      [SIGN_IN_KEY]: inputRequired.elicitUrl({ message: MESSAGE, url }),
+      [SIGN_IN_KEY]: inputRequired.elicitUrl({ message: messageFor(state), url }),
     },
   })
 }
@@ -135,8 +189,14 @@ export function priorAttempt(ctx: unknown): PriorAttempt {
 }
 
 /** The note explaining a retry that still found no credentials. */
-export function retryNote(attempt: PriorAttempt): string | undefined {
+export function retryNote(
+  attempt: PriorAttempt,
+  state: MissingCredentials = 'not-signed-in',
+): string | undefined {
   if (attempt === 'accepted') {
+    if (state === 'locked') {
+      return 'The page was opened but the credentials are still locked, so the master password was not entered.'
+    }
     return 'The sign-in page was opened but no credentials arrived, so the sign-in was not completed.'
   }
   if (attempt === 'refused') {
