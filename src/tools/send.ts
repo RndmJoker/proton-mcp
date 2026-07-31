@@ -31,6 +31,7 @@ import {
   mintMessageId,
   parseRecipient,
   parseRecipients,
+  UTF8_NOTE,
   type Draft,
 } from '../mail/compose.js'
 import {
@@ -171,7 +172,7 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
     'send_message',
     {
       title: 'Send a message',
-      description: `Composes a message and sends it. ${CONFIRMATION_NOTE}`,
+      description: `Composes a message and sends it. ${CONFIRMATION_NOTE} ${UTF8_NOTE}`,
       inputSchema: z.object({
         to: addressList('The main recipients.'),
         cc: addressList('Recipients in copy, visible to everyone.'),
@@ -214,7 +215,7 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
         'Replies to a message and sends the reply, with the reference headers that put it in the ' +
         'same conversation. Unlike a reply written as a draft, this one keeps those headers: ' +
         'Proton rewrites them for anything it stores, and this is never stored before it goes. ' +
-        `${CONFIRMATION_NOTE}`,
+        `${CONFIRMATION_NOTE} ${UTF8_NOTE}`,
       inputSchema: z.object({
         messageId: z.string().describe('The message being replied to.'),
         text: z.string().describe('The reply. The original is quoted below it.'),
@@ -251,7 +252,7 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
       title: 'Forward a message',
       description:
         'Forwards a message and sends it. The original is quoted, and when it carries attachments ' +
-        `the whole original travels along so nothing of it is lost. ${CONFIRMATION_NOTE}`,
+        `the whole original travels along so nothing of it is lost. ${CONFIRMATION_NOTE} ${UTF8_NOTE}`,
       inputSchema: z.object({
         messageId: z.string().describe('The message being forwarded.'),
         to: z.array(z.string()).min(1).describe('Who to forward it to.'),
