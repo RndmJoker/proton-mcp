@@ -105,18 +105,34 @@ Two refusals are worth understanding rather than working around:
 
 ## What the person confirming is shown
 
-Not only the body. Understanding this explains most of the rules above.
+Two things, in two places, and knowing which is which explains most of the rules
+above.
 
-- The beginning of what you wrote, as it will read.
+**In the client**, a short question: who it is from, **every** recipient, the
+subject, one line of counts, and a link. No part of the message itself. It used
+to carry the body and every address, and grew to 74 lines for a message with
+eighteen links, at which point the confirm button sat below the bottom of the
+dialog and nothing could be sent at all. Recipients are the one thing never
+summarised, however many there are.
+
+**In the browser**, everything else:
+
+- The message rendered as the recipient will see it, quote included.
 - **Every address in it, in full**, links and images alike, each with the text it
   is shown as. A link's visible text and its target are the same string in plain
   text and two different strings in markup, and that difference is the shape of
   every phishing message ever written.
-- **Every piece of text a recipient can read that the body preview does not
-  show.** An image's alt text is the clearest case: it never appears in the
-  converted body, and mail clients block remote images by default, so it is
-  frequently what the recipient actually reads.
+- **Every piece of text a recipient can read that the body does not show.** An
+  image's alt text is the clearest case: it never appears in the converted body,
+  and mail clients block remote images by default, so it is frequently what the
+  recipient actually reads.
 - Every file carried with the message, with its size.
+- Every property used beyond ordinary formatting, if \`markupLevel\` was
+  \`extended\`, with the ones that really hide something marked as such.
+
+The answer is given in the client, never in the browser. That page has no
+confirm button: its address reaches you through \`open_configuration\`, so a
+control there would be one you could press yourself.
 
 The agreement is bound to that exact message by a fingerprint covering the
 sender, every recipient, the subject, the markup and the contents of each

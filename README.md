@@ -38,6 +38,8 @@ This server therefore runs on your machine as well, started by the AI client as 
 
 Every tool that composes a message takes either `text` or `html`, never both: Proton drops the plain text half of a message that carries markup, so the half you confirmed would be the half that never arrived.
 
+They also take a `markupLevel`. At **`standard`**, the default, a message may use colour, background, font, alignment, spacing, borders and size, plus links, images, tables and lists; anything else is refused with a reason rather than quietly removed. At **`extended`** every CSS property is permitted, including ones that can put content out of sight. Nothing is refused there for being a style: what was used is reported instead, the confirmation carries a warning telling you to open the preview, and the preview names every property, its value and the element it sat on. A proper button needs `extended`, because a link cannot fill its own padding without `display: inline-block`.
+
 The server also tells an assistant how it works, so the rules are not something a model has to infer from failures. A short text travels with every connection naming the four things that go wrong quietly, and two longer guides can be read on demand: `proton-mcp://guide/writing` for composing messages and `proton-mcp://guide/bridge` for the measured behaviour of the Bridge itself.
 
 Underneath: a held IMAP connection that recovers from a Bridge restart, stable identifiers based on the Message-ID, HTML to text conversion, filtering of the public key Proton attaches to every sent message, and a character budget so a single message cannot exhaust a context window.
@@ -51,6 +53,8 @@ There is also a **local web interface**, on `127.0.0.1` only, running for as lon
 | Bridge | The ports, the pinned certificate, and a button that tries the connection. Ports are stored in `~/.config/proton-mcp/settings.json`; an explicit environment variable wins and the form disappears |
 | Credentials | Where the Bridge password is kept, and signing out, which clears it from every store at once |
 | Activity | What is running and for how long, plus the last 50 finished calls. Tool names and timings only, never arguments |
+
+One more appears only while a message is waiting for you to confirm it, linked from that question: the message rendered as the recipient will see it, every address in full, every alt text, every attachment. It is the one place this interface shows mail, and it carries no confirm button by design.
 
 Before signing in there are two more: the sign-in form, where the address and Bridge password go into the browser rather than into a client configuration or a conversation, with four places to keep the password and the cost of each stated; and the unlock page, which after a restart asks for the master password alone, since the Bridge password is already on disk.
 
@@ -99,6 +103,14 @@ Fetch https://raw.githubusercontent.com/RndmJoker/proton-mcp/main/prompt.md and 
 ```
 
 It checks the prerequisites, registers the server with your client and tells you what to do next. **It never asks for your Bridge password** and cannot: that goes into the local web interface, in your browser, and nowhere else.
+
+Later, to update:
+
+```
+Fetch https://raw.githubusercontent.com/RndmJoker/proton-mcp/main/update.md and follow it
+```
+
+It works out how you installed it, since the three ways look identical from the outside and are updated differently, and it reminds you that the client has to be restarted. Nothing has to be set up again: credentials, the pinned certificate and the ports all survive.
 
 ### From npm
 
@@ -258,14 +270,17 @@ Every tool that changes something is bounded on purpose:
 
 **A draft is the safe default.** The assistant prepares, you decide.
 
-**Messages can be plain text or formatted.** A formatted one may use headings, paragraphs, emphasis, lists, tables, links and images, with colour, font, alignment, spacing and borders. Anything outside that set is refused with a reason rather than quietly removed, because a message that was silently altered is no longer the message anyone agreed to.
+**Messages can be plain text or formatted.** A formatted one may use headings, paragraphs, emphasis, lists, tables, links and images, with colour, font, alignment, spacing and borders. **Images work the ordinary way**: an `<img>` at an `https` address, at any size, inside a link, animated if you like. Only a `data:` address is refused, because it would carry a whole file inside the markup where nothing lists it.
 
-Formatting changes what a confirmation has to show, and that is the interesting part. In plain text a link's visible text and its target are the same string, so showing you the body shows you everything. In markup they are two strings, which is the shape of every phishing mail ever written. So the confirmation for a formatted message adds two blocks that are never shortened:
+Anything outside the permitted set is refused with a reason rather than quietly removed, because a message that was silently altered is no longer the message anyone agreed to. **The refusal names the way forward**, which is usually `markupLevel: "extended"`.
+
+Formatting changes what a confirmation has to show, and that is the interesting part. In plain text a link's visible text and its target are the same string, so showing you the body shows you everything. In markup they are two strings, which is the shape of every phishing mail ever written. Neither fits in a dialog, so both live on the preview page, never shortened:
 
 - **Every address in the message**, links and images alike, each with the text it is shown as.
-- **Text a recipient can read that the body preview does not show.** Measured: an image's alt text never appears in the converted body, and mail clients block remote images by default, so the alt text is frequently what the recipient actually reads. That was a way past the confirmation, and it is closed.
+- **Text a recipient can read that the body does not show.** Measured: an image's alt text never appears in the converted body, and mail clients block remote images by default, so the alt text is frequently what the recipient actually reads. That was a way past the confirmation, and it is closed.
+- **Every property beyond ordinary formatting**, when `extended` was used, with the ones that really put something out of sight marked as such.
 
-The set of permitted markup leaves out `style`, `script`, `noscript`, `textarea` and `head` by not listing them. Those are the elements whose content the preview and a mail client disagree about, and a list of what is allowed refuses them without anyone having had to think of them first. Attachments from files on this machine are deliberately not supported: a path named by a model, read by the server and carried out by the next confirmation is not a feature, it is a way out for anything on your disk. Forwarding loses nothing all the same, because the original message travels along whole.
+What no level permits is `style` blocks, `script`, event handlers and `data:` addresses. The line runs between describing a document and running inside it or reaching out of it: a `<style>` in the quote of a reply restyles the answer written above it, and 66 percent of real formatted mail carries one. Attachments from files on this machine are deliberately not supported either: a path named by a model, read by the server and carried out by the next confirmation is not a feature, it is a way out for anything on your disk. Forwarding loses nothing all the same, because the original message travels along whole, embedded images included.
 
 One thing worth knowing about drafts: Proton rewrites the thread headers of anything it stores. A reply is built with `In-Reply-To` and `References`, and what comes back has neither, only Proton's own internal thread id. Threading a stored draft is therefore Proton's business rather than this server's.
 
@@ -275,7 +290,10 @@ Writes need a moment to settle. A move takes roughly fifteen seconds to reconcil
 
 Mail is text written by strangers, handed to a model that can call tools. A message can politely ask to be forwarded somewhere, and other projects answer that with a line in a system prompt. **A system prompt is not a security boundary.** This one lives in the server:
 
-- **Nothing is sent without a person saying yes.** The first call never sends. It returns a question through your client showing the final recipients separated into To, Cc and Bcc, the subject, and the first lines. Only the second call, carrying your answer, sends.
+- **Nothing is sent without a person saying yes.** The first call never sends. It returns a question through your client naming the sender, every recipient separated into To, Cc and Bcc, and the subject. Only the second call, carrying your answer, sends.
+- **The question is short, and the message is somewhere with room.** It carries no part of the message itself; it links to a page in the local interface where you can read it as the recipient will see it, with every address in full. That split exists because the question used to grow with the message: 74 lines for a newsletter-shaped one, at which point the confirm button sat below the bottom of the dialog and nothing could be sent at all.
+- **Recipients are never summarised**, however many there are. Seeing three of eight would mean agreeing to a send to five strangers.
+- **The answer goes through your client, never through the browser.** That page has no confirm button and will not get one: the address of the interface reaches your assistant, so a control there could be operated by the thing it is supervising.
 - **There is no setting that turns the question off.** Not an environment variable, not an argument, not a mode.
 - **A client that cannot ask cannot send.** If your client does not support form elicitation, sending is refused and you are pointed at drafts instead. That is deliberately different from the sign-in prompt, which falls back to text: the worst outcome there is an inconvenience, and here it is a message that cannot be recalled. What counts as "can ask" is the capability your client declares, read from the request when the protocol revision carries it there and from the handshake otherwise.
 - **Your yes covers one specific message.** A fingerprint of the sender, every recipient, the subject and the body is sealed with an HMAC whose key exists only in the running process, and it travels with the question. On the way back the fingerprint is recomputed from what is being asked for now. If a single address was added in between, nothing is sent. A confirmation is also bound to the tool that asked, so one cannot be reused for another.
@@ -310,7 +328,7 @@ It binds to `127.0.0.1` and there is no option to change that. It is not remote 
 - **An Origin check and a per-action CSRF token** on everything that changes something, so a token for one action cannot be replayed against another.
 - **A strict Content-Security-Policy.** Nothing may be loaded from anywhere and nothing can reach the network. The interface also serves no files from disk at all, which removes path traversal as a category rather than guarding against it.
 
-It shows no message content, by design. It is for configuration and state, not a mail client.
+It shows no message content, with exactly one exception: a message waiting for you to confirm it. That page renders it as the recipient will see it, and lists every address, alt text and attachment. The message is held in memory only, dropped as soon as you answer either way, and gone after fifteen minutes. Somebody else's markup, which a reply carries as its quote, is rendered in a frame with no permissions at all, and images from the internet are not loaded: a tracking pixel must not tell its author that you looked.
 
 ### What you actually expose
 
