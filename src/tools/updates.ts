@@ -81,8 +81,12 @@ export async function latestVersion(
 ): Promise<UpdateCheck> {
   const stop = AbortSignal.timeout(timeoutMs)
   try {
+    // encodeURIComponent rather than replacing the slash by hand. The hand
+    // version worked for this one name, which has exactly one slash, and would
+    // have encoded only the first of any others: a correctness that depends on
+    // the value never changing. Flagged by CodeQL, and it was right to.
     const response = await fetchImpl(
-      `https://registry.npmjs.org/${PACKAGE.replace('/', '%2F')}/latest`,
+      `https://registry.npmjs.org/${encodeURIComponent(PACKAGE)}/latest`,
       { signal: stop, headers: { accept: 'application/json' } },
     )
     if (!response.ok) {
