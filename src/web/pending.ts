@@ -55,6 +55,11 @@ export interface PendingData {
   attachments: string[]
   /** Present for a reply or a forward. Counted, not listed. */
   quoted?: { links: number; images: number; hiddenText: number }
+  /**
+   * Properties used beyond the ordinary set, when the wider markup level was
+   * chosen. Empty for almost every message.
+   */
+  styleNotes: Array<{ property: string; value: string; element: string; hides: boolean }>
 }
 
 /** A row of recipients, or nothing when that field is empty. */
@@ -107,6 +112,54 @@ function urlTable(urls: PendingUrl[]): string {
 <p class="hint"><strong>A link's text and its address are two different things.</strong> Read the
 addresses, not the words they hide behind. That difference is the shape of every phishing message
 ever written, and it is the reason this list is never shortened.</p>
+</div>`
+}
+
+/**
+ * What the message does beyond ordinary formatting.
+ *
+ * The counterpart to the warning in the confirmation, and the reason that
+ * warning can be short: it says "go and look", and this is what there is to
+ * look at. Every property, its value, and the element it sat on, with the ones
+ * that really take something out of sight marked as such.
+ *
+ * Sorted so those come first. Somebody who reads three rows and stops should
+ * have read the three that matter.
+ */
+function styleTable(notes: PendingData['styleNotes']): string {
+  if (notes.length === 0) return ''
+
+  const sorted = [...notes].sort((a, b) => Number(b.hides) - Number(a.hides))
+  const rows = sorted
+    .map(
+      (n) => `<tr>
+      <td><code>${escapeHtml(n.property)}</code></td>
+      <td><code>${escapeHtml(n.value)}</code></td>
+      <td><code>&lt;${escapeHtml(n.element)}&gt;</code></td>
+      <td>${n.hides ? '<strong>hides content</strong>' : 'layout only'}</td>
+    </tr>`,
+    )
+    .join('\n')
+
+  const hiding = notes.filter((n) => n.hides).length
+
+  return `<h2>Formatting beyond the ordinary set (${notes.length})</h2>
+<div class="card">
+${
+  hiding > 0
+    ? `<p><strong>${hiding} of these put something out of sight.</strong> The preview above shows
+      what a recipient sees; anything hidden is missing from it and from the text of this message
+      as well. Read the rows marked below and decide whether that is what was meant.</p>`
+    : `<p>None of these hides anything by itself. They are the properties that <em>can</em>, which
+      is why they are listed: a button needs <code>display: inline-block</code>, and the same
+      property with the value <code>none</code> would make text disappear.</p>`
+}
+<table class="wide">
+  <tr><th>Property</th><th>Value</th><th>On</th><th>Effect</th></tr>
+  ${rows}
+</table>
+<p class="hint">These were permitted because the message asked for markup level "extended". At
+"standard" they would have been refused with a reason instead.</p>
 </div>`
 }
 
@@ -171,6 +224,7 @@ ${recipientRow('Bcc', data.bcc)}
 <h2>Every address in it (${data.urls.length})</h2>
 ${urlTable(data.urls)}
 
+${styleTable(data.styleNotes)}
 ${hidden}
 ${files}
 ${quoted}`,

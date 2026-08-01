@@ -90,16 +90,58 @@ export const PERMITTED_STYLES = new Set([
 ])
 
 /**
- * Properties that take a message out of sight without taking it out of the
- * message. Refused whatever else is written.
+ * Properties that can take content out of sight without taking it out of the
+ * message.
+ *
+ * These used to be refused outright. That was too blunt in both directions.
+ * `display: inline-block` is what makes a link fill its own padding, which is
+ * what makes a button clickable, and it hides nothing; `float` is ordinary
+ * layout that mail has used for twenty years. Refusing the property rather than
+ * the value cost every message a usable button and bought nothing, because a
+ * confirmation that reads markup without applying it showed the hidden text
+ * anyway.
+ *
+ * What changed is that the preview now renders. Text hidden by CSS really does
+ * disappear from it, so the answer is no longer to refuse the property but to
+ * say plainly that it was used, where, and how often, and to let the person
+ * decide.
  */
-const HIDING_STYLES = new Set([
+export const RISKY_STYLES = new Set([
   'display', 'visibility', 'opacity', 'position', 'z-index', 'overflow',
-  'clip', 'clip-path', 'transform', 'text-indent', 'float', 'content',
+  'clip', 'clip-path', 'transform', 'text-indent', 'content',
   'max-height', 'min-height', 'mix-blend-mode', 'filter',
 ])
 
-/** Properties whose value must be a positive size. Zero is a way of hiding. */
+/** Values of those properties that actually take something out of sight. */
+function hidesContent(name: string, value: string): boolean {
+  const v = value.trim().toLowerCase()
+  switch (name) {
+    case 'display':
+      return v === 'none'
+    case 'visibility':
+      return v === 'hidden' || v === 'collapse'
+    case 'opacity':
+      return Number.parseFloat(v) < 0.1
+    case 'max-height':
+    case 'min-height':
+      return /^0(\D|$)/.test(v)
+    case 'text-indent':
+      return v.startsWith('-')
+    case 'position':
+      return v === 'absolute' || v === 'fixed'
+    case 'overflow':
+      return v === 'hidden'
+    case 'filter':
+      return /opacity\s*\(\s*0?(\.0*[0-9])?\s*\)/.test(v)
+    default:
+      // clip, clip-path, transform, z-index, content, mix-blend-mode: whether
+      // they hide anything depends on values this server has no business
+      // interpreting. Treated as worth mentioning rather than as proven.
+      return false
+  }
+}
+
+/** Properties whose value being zero or less takes content out of sight. */
 const MUST_BE_POSITIVE = new Set(['font-size', 'line-height', 'width', 'height', 'max-width'])
 
 /** A scheme in an href or src. Anything else is refused. */
@@ -111,6 +153,38 @@ export interface MarkupProblem {
   found: string
   /** Why it cannot be sent, and what to do instead. */
   reason: string
+}
+
+/**
+ * How much markup a message may carry.
+ *
+ * Chosen per call by whoever is composing, with `standard` as the default that
+ * applies when nobody says otherwise. The point of naming them rather than
+ * listing properties is that a caller has to decide something it can explain,
+ * and that the answer travels into the confirmation where a person sees it.
+ */
+export type MarkupLevel =
+  /**
+   * Colour, font, spacing, borders, size, alignment. Everything an ordinary
+   * formatted message uses, and nothing that can put text out of sight.
+   * Anything else is refused with a reason.
+   */
+  | 'standard'
+  /**
+   * Every CSS property, including the ones that can hide content. Nothing is
+   * refused for being a style; what is used is reported instead, and the
+   * confirmation says so in as many words.
+   */
+  | 'extended'
+
+/** One use of a property worth telling the person about before they agree. */
+export interface StyleNote {
+  property: string
+  value: string
+  /** The element it sat on, so the preview can say where. */
+  element: string
+  /** True when this value really does take something out of sight. */
+  hides: boolean
 }
 
 /** An address the message points at, which a person has to see before sending. */
@@ -128,23 +202,65 @@ export interface MarkupReading {
   hiddenText: string[]
   /** Content ids an image refers to, which have to be provided as parts. */
   contentIds: string[]
+  /**
+   * Properties used that are worth telling the person about.
+   *
+   * Empty for a message that stays inside the ordinary set, which is almost
+   * every message. Anything in here means the confirmation says so and the
+   * preview lists it.
+   */
+  styleNotes: StyleNote[]
 }
 
-function styleProblems(tag: string, style: string): MarkupProblem[] {
+/**
+ * Reads one style attribute.
+ *
+ * At `standard` a property outside the ordinary set is refused with a reason,
+ * which is what it always did. At `extended` nothing is refused for being a
+ * style; every property outside that set is written down instead, together with
+ * whether its value really takes something out of sight.
+ *
+ * The distinction between "unusual" and "hides something" is the whole point.
+ * `display: inline-block` is a button; `display: none` is a disappearance. One
+ * property, two very different things to tell somebody.
+ */
+function readStyle(
+  tag: string,
+  style: string,
+  level: MarkupLevel,
+): { problems: MarkupProblem[]; notes: StyleNote[] } {
   const problems: MarkupProblem[] = []
+  const notes: StyleNote[] = []
+
   for (const declaration of style.split(';')) {
     const [rawName, ...rest] = declaration.split(':')
     const name = (rawName ?? '').trim().toLowerCase()
     const value = rest.join(':').trim()
     if (!name) continue
 
-    if (HIDING_STYLES.has(name)) {
+    const ordinary =
+      PERMITTED_STYLES.has(name) && !(MUST_BE_POSITIVE.has(name) && /^0(\D|$)|^-/.test(value))
+    if (ordinary) continue
+
+    if (level === 'extended') {
+      notes.push({
+        property: name,
+        value,
+        element: tag,
+        hides:
+          hidesContent(name, value) ||
+          (MUST_BE_POSITIVE.has(name) && /^0(\D|$)|^-/.test(value)),
+      })
+      continue
+    }
+
+    if (RISKY_STYLES.has(name)) {
       problems.push({
         found: `style "${name}" on <${tag}>`,
         reason:
-          `"${name}" can put text out of sight while leaving it in the message, so a recipient ` +
-          'and the person who confirmed the send would not read the same thing. Style the message ' +
-          'with colour, font and spacing instead.',
+          `"${name}" can put text out of sight while leaving it in the message. It is available ` +
+          'with markup level "extended", which shows the person confirming exactly what was used ' +
+          'and where. Use it only when there is no other way.',
       })
       continue
     }
@@ -152,21 +268,21 @@ function styleProblems(tag: string, style: string): MarkupProblem[] {
       problems.push({
         found: `style "${name}" on <${tag}>`,
         reason:
-          `"${name}" is not among the properties this server sends. Permitted are colour, ` +
-          'background, font, alignment, spacing, borders and size.',
+          `"${name}" is not among the properties sent at markup level "standard". Permitted are ` +
+          'colour, background, font, alignment, spacing, borders and size. Everything else is ' +
+          'available at level "extended", which tells the person confirming what was used.',
       })
       continue
     }
-    if (MUST_BE_POSITIVE.has(name) && /^0(\D|$)|^-/.test(value)) {
-      problems.push({
-        found: `style "${name}: ${value}" on <${tag}>`,
-        reason:
-          `A "${name}" of zero or less makes text unreadable without removing it, which is the ` +
-          'same as hiding it. Give it a real size or leave it out.',
-      })
-    }
+    problems.push({
+      found: `style "${name}: ${value}" on <${tag}>`,
+      reason:
+        `A "${name}" of zero or less makes text unreadable without removing it, which is the ` +
+        'same as hiding it. Give it a real size, or use markup level "extended", which says ' +
+        'plainly that it was done.',
+    })
   }
-  return problems
+  return { problems, notes }
 }
 
 function urlProblem(tag: string, attribute: string, value: string): MarkupProblem | undefined {
@@ -200,11 +316,12 @@ function urlProblem(tag: string, attribute: string, value: string): MarkupProble
  * One pass, because the two questions are the same walk over the document and
  * answering them separately is how they drift apart.
  */
-export function readMarkup(html: string): MarkupReading {
+export function readMarkup(html: string, level: MarkupLevel = 'standard'): MarkupReading {
   const problems: MarkupProblem[] = []
   const urls: MarkupUrl[] = []
   const hiddenText: string[] = []
   const contentIds: string[] = []
+  const styleNotes: StyleNote[] = []
 
   // A link's text arrives as separate events between its tags, so it is
   // collected while the link is open.
@@ -238,7 +355,11 @@ export function readMarkup(html: string): MarkupReading {
             })
             continue
           }
-          if (attribute === 'style') problems.push(...styleProblems(tag, String(value)))
+          if (attribute === 'style') {
+            const read = readStyle(tag, String(value), level)
+            problems.push(...read.problems)
+            styleNotes.push(...read.notes)
+          }
           if (attribute === 'href' || attribute === 'src') {
             const problem = urlProblem(tag, attribute, String(value))
             if (problem) problems.push(problem)
@@ -285,7 +406,7 @@ export function readMarkup(html: string): MarkupReading {
 
   if (openLink) urls.push({ kind: 'link', url: openLink.url, label: openLink.text.trim() })
 
-  return { problems, urls, hiddenText, contentIds }
+  return { problems, urls, hiddenText, contentIds, styleNotes }
 }
 
 /**
@@ -296,8 +417,8 @@ export function readMarkup(html: string): MarkupReading {
  * nobody would find out: not the caller, whose formatting quietly vanishes, and
  * not the person confirming, who has nothing to compare against.
  */
-export function assertSendableMarkup(html: string): MarkupReading {
-  const reading = readMarkup(html)
+export function assertSendableMarkup(html: string, level: MarkupLevel = 'standard'): MarkupReading {
+  const reading = readMarkup(html, level)
   if (reading.problems.length === 0) return reading
 
   const listed = reading.problems

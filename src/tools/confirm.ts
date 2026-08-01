@@ -48,6 +48,7 @@ import {
   composedBody,
   showRecipient,
   summariseQuote,
+  styleNotesOf,
   type Draft,
 } from '../mail/compose.js'
 import { canElicitForm } from './capabilities.js'
@@ -162,6 +163,28 @@ export function describeForConfirmation(draft: Draft, what: string, previewUrl?:
 
   const counts = countsFor(draft)
   if (counts) lines.push('', counts)
+
+  // The one part of this text meant to stop somebody rather than inform them.
+  //
+  // It appears whenever the wider markup level was used at all, not only when
+  // something was demonstrably hidden. Whether a value hides anything depends
+  // on where it sits, and a warning clever enough to judge that is a warning
+  // that will be wrong once, in the direction nobody wants.
+  const notes = styleNotesOf(draft)
+  if (notes.length > 0) {
+    const hiding = notes.filter((n) => n.hides)
+    lines.push(
+      '',
+      '!!! THIS MESSAGE USES MARKUP THAT CAN HIDE CONTENT !!!',
+      '',
+      hiding.length > 0
+        ? `${notes.length} unusual propert(ies) were used, and ${hiding.length} of them put ` +
+          'something out of sight. What a recipient sees is not what this message says it is.'
+        : `${notes.length} unusual propert(ies) were used. None of them hides anything by ` +
+          'itself, but they are the ones that can.',
+      'Open the preview and look before answering. It names every one, its value and where it sat.',
+    )
+  }
 
   if (previewUrl) {
     lines.push(
