@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { buildMessage, readableBody, describeUrls, hiddenTextOf, type Draft } from '../../src/mail/compose.js'
 import { digestOf, describeForConfirmation } from '../../src/tools/confirm.js'
+import { holdForPreview, _reset as resetPreviews } from '../../src/tools/preview.js'
+import { pendingView } from '../../src/tools/pending-view.js'
+import { pendingPage } from '../../src/web/pending.js'
 import { BridgeError } from '../../src/bridge/errors.js'
 
 /**
@@ -28,6 +31,22 @@ function draft(over: Partial<Draft> = {}): Draft {
 
 const withHtml = (html: string, over: Partial<Draft> = {}): Draft =>
   draft({ html, text: readableBody({ ...draft(), html }), ...over })
+
+/**
+ * The page a confirmation points at, for a given message.
+ *
+ * The evidence used to be in the confirmation text and is now here. These tests
+ * moved with it rather than being deleted: what a recipient can read and the
+ * confirmer cannot is the same question wherever it is answered.
+ */
+function previewFor(message: Draft, tool = 'send_message'): string {
+  resetPreviews()
+  const digest = digestOf(message)
+  holdForPreview(digest, message, tool)
+  const view = pendingView(digest)
+  if (!view) throw new Error('the message was not held')
+  return pendingPage({ ...view, token: 'test-token', disclaimer: 'plain' })
+}
 
 describe('a formatted message is delivered as formatting', () => {
   it('is sent as html rather than as visible tags', async () => {
@@ -74,14 +93,13 @@ describe('a formatted message is delivered as formatting', () => {
   })
 })
 
-describe('the confirmation shows what the body does not', () => {
+describe('the preview shows what the body does not', () => {
   it('lists every address in full, links and images alike', () => {
-    const shown = describeForConfirmation(
+    const shown = previewFor(
       withHtml(
         '<a href="https://elsewhere.invalid/pay">our invoice portal</a>' +
           '<img src="https://tracker.invalid/p.gif">',
       ),
-      'This message',
     )
     expect(shown).toContain('https://elsewhere.invalid/pay')
     expect(shown).toContain('our invoice portal')
@@ -95,21 +113,18 @@ describe('the confirmation shows what the body does not', () => {
     const html = '<img src="https://example.invalid/x.png" alt="Please transfer 500 euros">'
     expect(readableBody(withHtml(html))).not.toContain('500 euros')
 
-    const shown = describeForConfirmation(withHtml(html), 'This message')
+    const shown = previewFor(withHtml(html))
     expect(shown).toContain('500 euros')
-    expect(shown).toContain('not in the body above')
+    expect(shown).toContain('Text the body does not show')
   })
 
   it('shows a title attribute for the same reason', () => {
-    const shown = describeForConfirmation(
-      withHtml('<span title="read on hover">visible</span>'),
-      'This message',
-    )
+    const shown = previewFor(withHtml('<span title="read on hover">visible</span>'))
     expect(shown).toContain('read on hover')
   })
 
   it('names every carried file with its size', () => {
-    const shown = describeForConfirmation(
+    const shown = previewFor(
       withHtml('<img src="cid:logo@x">', {
         inlineParts: [
           {
@@ -120,27 +135,127 @@ describe('the confirmation shows what the body does not', () => {
           },
         ],
       }),
-      'This message',
     )
     expect(shown).toContain('logo.png')
     expect(shown).toContain('1234 bytes')
   })
 
-  it('does not shorten the address list, unlike the body', () => {
+  it('does not shorten the address list', () => {
     // An address on line thirty is exactly where one would be put in order not
-    // to be read, so the list is never cut.
+    // to be read, so the list is never cut. The page has room for it, which is
+    // the whole reason the evidence lives here now.
+    //
+    // Checked against the table alone, not the whole page: the rendered frame
+    // repeats the message and therefore every address in it, so a search over
+    // the whole document passes even with the table cut to three rows. Measured
+    // by cutting it, which is how this test came to be written this way.
     const links = Array.from(
       { length: 12 },
       (_, i) => `<p>line ${i}</p><a href="https://example.invalid/${i}">link ${i}</a>`,
     ).join('')
-    const shown = describeForConfirmation(withHtml(links), 'This message')
-    for (let i = 0; i < 12; i += 1) expect(shown).toContain(`https://example.invalid/${i}`)
+    const table = previewFor(withHtml(links)).split('<h2>Every address in it')[1] ?? ''
+    expect(table).not.toBe('')
+    for (let i = 0; i < 12; i += 1) expect(table).toContain(`https://example.invalid/${i}`)
   })
 
-  it('says nothing extra for a plain text message', () => {
-    const shown = describeForConfirmation(draft(), 'This message')
-    expect(shown).not.toContain('Every address in this message')
-    expect(shown).not.toContain('not in the body above')
+  it('renders the message in a frame that can do nothing', () => {
+    // A reply carries a stranger's markup byte for byte. Sandboxed with no
+    // values at all: no script, no forms, no same-origin access.
+    const shown = previewFor(withHtml('<p>Hello</p>'))
+    expect(shown).toMatch(/<iframe[^>]*\bsandbox\b/)
+    expect(shown).not.toMatch(/<iframe[^>]*sandbox="[^"]*allow-(scripts|same-origin)/)
+  })
+
+  it('carries nothing that could answer the question', () => {
+    // open_configuration hands this address to the model, so a control here
+    // could be operated by the thing being supervised. The answer goes through
+    // the client instead.
+    //
+    // Checked with the dismissable notice present, because that is the state a
+    // real page is in and it carries the one button that is allowed to exist.
+    // Asserting "no button at all" passed only because the test happened to
+    // render the page without it.
+    const digest = digestOf(withHtml('<p>Hello</p>'))
+    resetPreviews()
+    holdForPreview(digest, withHtml('<p>Hello</p>'), 'send_message')
+    const view = pendingView(digest)
+    if (!view) throw new Error('the message was not held')
+    const shown = pendingPage({
+      ...view,
+      token: 'test-token',
+      disclaimer: { csrf: 'c', from: 'overview' },
+    })
+
+    const forms = [...shown.matchAll(/<form[^>]*action="([^"]*)"/g)].map((m) => m[1])
+    // Exactly one form, and it dismisses a paragraph.
+    expect(forms).toHaveLength(1)
+    expect(forms[0]).toContain('/dismiss-notice')
+    // Nothing that posts back to a sending path.
+    expect(shown).not.toMatch(/action="[^"]*(send|confirm|approve)/)
+  })
+})
+
+describe('the confirmation itself stays short', () => {
+  /**
+   * Why this is a security test rather than a cosmetic one.
+   *
+   * Measured before the change: 11 lines for a plain text message, 24 for a
+   * formatted one, 74 for a newsletter-shaped one. Past a certain length the
+   * client's dialog could not be answered at all, because the button sat below
+   * the bottom of the window. A confirmation nobody can answer does not protect
+   * anything.
+   */
+  const previewLink = 'http://127.0.0.1:7345/pending/abc'
+
+  it('names every recipient, which is the one thing never summarised', () => {
+    const many = draft({
+      to: [{ address: 'a@example.com' }, { address: 'b@example.com' }],
+      cc: [{ address: 'c@example.com' }],
+      bcc: [{ address: 'd@example.com' }],
+    })
+    const shown = describeForConfirmation(many, 'This message', previewLink)
+    for (const who of ['a@example.com', 'b@example.com', 'c@example.com', 'd@example.com']) {
+      expect(shown).toContain(who)
+    }
+  })
+
+  it('carries no message content at all', () => {
+    const shown = describeForConfirmation(
+      withHtml('<p>Secret plans</p><a href="https://elsewhere.invalid/pay">portal</a>'),
+      'This message',
+      previewLink,
+    )
+    expect(shown).not.toContain('Secret plans')
+    expect(shown).not.toContain('elsewhere.invalid')
+    expect(shown).toContain(previewLink)
+  })
+
+  it('stays short even for a message stuffed with links', () => {
+    const links = Array.from(
+      { length: 40 },
+      (_, i) => `<a href="https://example.invalid/very/long/path/number/${i}">link ${i}</a>`,
+    ).join('')
+    const shown = describeForConfirmation(withHtml(links), 'This message', previewLink)
+    // The dialog has to stay answerable whatever the message carries.
+    expect(shown.split('\n').length).toBeLessThan(16)
+  })
+
+  it('says what the message carries, as counts', () => {
+    const shown = describeForConfirmation(
+      withHtml('<a href="https://a.invalid/1">one</a><img src="https://a.invalid/2" alt="hidden">'),
+      'This message',
+      previewLink,
+    )
+    expect(shown).toMatch(/2 address\(es\)/)
+    expect(shown).toMatch(/1 piece\(s\) of text the body does not show/)
+  })
+
+  it('says so plainly when there is nowhere to read it', () => {
+    // No interface running. A question asked with less behind it than usual
+    // should say as much rather than quietly offer less.
+    const shown = describeForConfirmation(withHtml('<p>Hello</p>'), 'This message')
+    expect(shown).toContain('cannot be shown in full')
+    expect(shown).not.toContain('http://')
   })
 })
 
@@ -202,27 +317,43 @@ describe('helpers agree with each other', () => {
   })
 })
 
-describe('a quoted message in the confirmation', () => {
-  it('is named and counted rather than listed', () => {
-    // Measured on a real mailbox: four images per message on average. Listing a
-    // quote's addresses would bury the ones the sender is answering for.
-    const draft = withHtml('<p>My answer.</p>', {
+describe('a quoted message in the preview', () => {
+  it('is counted rather than listed', () => {
+    // Measured on a real mailbox: four images per message on average and up to
+    // thirty links. Listing a quote's addresses would bury the ones the sender
+    // is answering for under ones that arrived in the mailbox anyway.
+    const message = withHtml('<p>My answer.</p>', {
       quotedHtml:
         '<blockquote><a href="https://a.invalid">one</a><a href="https://b.invalid">two</a>' +
         '<img src="https://c.invalid/p.png"></blockquote>',
     })
-    const shown = describeForConfirmation(draft, 'This reply')
-    expect(shown).toContain('2 link(s) and 1 image(s)')
-    expect(shown).not.toContain('https://a.invalid')
+    const shown = previewFor(message, 'send_reply')
+    expect(shown).toContain('2 link(s), 1 image(s)')
+    // Not in the address table. It is visible inside the rendered frame, which
+    // is where a quote belongs: readable, not itemised.
+    expect(shown.split('<h2>Every address in it')[1] ?? '').not.toContain('https://a.invalid')
   })
 
-  it('still shows every address of the part that was written', () => {
-    const draft = withHtml('<p><a href="https://mine.invalid">mine</a></p>', {
+  it('still lists every address of the part that was written', () => {
+    const message = withHtml('<p><a href="https://mine.invalid">mine</a></p>', {
       quotedHtml: '<blockquote><a href="https://theirs.invalid">theirs</a></blockquote>',
     })
-    const shown = describeForConfirmation(draft, 'This reply')
-    expect(shown).toContain('https://mine.invalid')
-    expect(shown).not.toContain('https://theirs.invalid')
+    const shown = previewFor(message, 'send_reply')
+    const table = shown.split('<h2>Every address in it')[1] ?? ''
+    expect(table).toContain('https://mine.invalid')
+    expect(table).not.toContain('https://theirs.invalid')
+  })
+
+  it('renders your part and the quote together, as the recipient gets them', () => {
+    // The opposite of what the confirmation does, and both are right for where
+    // they are: the question asks about the part somebody wrote, the page
+    // answers what arrives.
+    const message = withHtml('<p>My answer.</p>', {
+      quotedHtml: '<blockquote>Their words</blockquote>',
+    })
+    const shown = previewFor(message, 'send_reply')
+    expect(shown).toContain('My answer.')
+    expect(shown).toContain('Their words')
   })
 
   it('is covered by the digest, because it is part of what goes out', () => {

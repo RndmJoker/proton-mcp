@@ -157,6 +157,21 @@ Tell the user, in plain words:
 
 ---
 
+## Later, to update
+
+The server can answer that itself: `check_for_updates` asks npm and reports what
+to run. It is the only thing in this server that contacts anything other than
+the user's own machine, so mention that when you use it rather than after.
+
+There is also a counterpart to this file, for doing the whole thing:
+
+```
+Fetch https://raw.githubusercontent.com/RndmJoker/proton-mcp/main/update.md and follow it
+```
+
+Worth mentioning once at the end of setup, because how a version is updated
+depends on how it was installed, and that is not obvious from the outside.
+
 ## Where to read more
 
 - The readme, which lists what works and what does not:

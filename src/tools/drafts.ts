@@ -116,6 +116,16 @@ export function registerDraftTools(
               'point at a full address; anything outside the permitted set is refused with a ' +
               'reason rather than removed.',
           ),
+        markupLevel: z
+          .enum(['standard', 'extended'])
+          .default('standard')
+          .describe(
+            'How much markup is permitted. "standard" covers ordinary formatted mail. ' +
+              '"extended" permits every CSS property, including ones that can hide content, and ' +
+              'makes the confirmation carry a warning telling the person to open the preview. ' +
+              'Prefer "standard"; reach for "extended" only when asked for something that needs ' +
+              'it, such as a button, which requires display:inline-block.',
+          ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -159,6 +169,16 @@ export function registerDraftTools(
               'links and images, with colour, font, alignment, spacing and borders. Images may ' +
               'point at a full address; anything outside the permitted set is refused with a ' +
               'reason rather than removed.',
+          ),
+        markupLevel: z
+          .enum(['standard', 'extended'])
+          .default('standard')
+          .describe(
+            'How much markup is permitted. "standard" covers ordinary formatted mail. ' +
+              '"extended" permits every CSS property, including ones that can hide content, and ' +
+              'makes the confirmation carry a warning telling the person to open the preview. ' +
+              'Prefer "standard"; reach for "extended" only when asked for something that needs ' +
+              'it, such as a button, which requires display:inline-block.',
           ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -211,6 +231,16 @@ export function registerDraftTools(
               'from its own markup, so a message full of markup this server would not send can ' +
               'still be replied to or forwarded.',
           ),
+        markupLevel: z
+          .enum(['standard', 'extended'])
+          .default('standard')
+          .describe(
+            'How much markup is permitted. "standard" covers ordinary formatted mail. ' +
+              '"extended" permits every CSS property, including ones that can hide content, and ' +
+              'makes the confirmation carry a warning telling the person to open the preview. ' +
+              'Prefer "standard"; reach for "extended" only when asked for something that needs ' +
+              'it, such as a button, which requires display:inline-block.',
+          ),
         mailbox: z.string().optional().describe('The mailbox the original is in, if known.'),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -258,6 +288,16 @@ export function registerDraftTools(
               'below it either way. The quote is always built from the original\'s text, never ' +
               'from its own markup, so a message full of markup this server would not send can ' +
               'still be replied to or forwarded.',
+          ),
+        markupLevel: z
+          .enum(['standard', 'extended'])
+          .default('standard')
+          .describe(
+            'How much markup is permitted. "standard" covers ordinary formatted mail. ' +
+              '"extended" permits every CSS property, including ones that can hide content, and ' +
+              'makes the confirmation carry a warning telling the person to open the preview. ' +
+              'Prefer "standard"; reach for "extended" only when asked for something that needs ' +
+              'it, such as a button, which requires display:inline-block.',
           ),
         mailbox: z.string().optional().describe('The mailbox the original is in, if known.'),
       }),

@@ -25,6 +25,7 @@ import {
   mailboxSection,
 } from './sections.js'
 import type { Section, DisclaimerState } from './layout.js'
+import { pendingPage, noPendingPage, type PendingData } from './pending.js'
 
 /**
  * Upper bound for a request body.
@@ -127,6 +128,16 @@ export interface WebInterfaceOptions {
   noticeDismissed?: () => boolean
   /** Remembers a dismissal. Without it the notice has no button. */
   onDismissNotice?: () => Promise<void>
+  /**
+   * The message behind a pending confirmation, if one is waiting.
+   *
+   * Absent when nothing can be previewed, which makes the page say so rather
+   * than fail. What it returns is decrypted mail, so the caller holds it in
+   * memory only and drops it as soon as the question is answered.
+   */
+  getPending?: (
+    digest: string,
+  ) => Omit<PendingData, 'token' | 'disclaimer'> | undefined
   /** Where notices go. stderr, never stdout, which carries the MCP protocol. */
   notify?: (message: string) => void
 }
@@ -379,6 +390,13 @@ export class WebInterface {
         await this.#render(section, response)
         return
       }
+      // The message waiting for an answer. Its own path rather than a section,
+      // because it exists only while a question is open and is reached from a
+      // link in that question.
+      if (path.startsWith('/pending/')) {
+        await this.#renderPending(response, path.slice('/pending/'.length))
+        return
+      }
     }
     if (writing && path === '/dismiss-notice') {
       await this.#handleDismissNotice(response, body.fields)
@@ -543,6 +561,41 @@ export class WebInterface {
         })
     }
 
+    this.#send(response, 200, 'text/html; charset=utf-8', page)
+  }
+
+  /**
+   * Shows a message that is waiting to be sent.
+   *
+   * Deliberately not a section: it is reached from the confirmation, exists
+   * only while that question is unanswered, and belongs to no part of the
+   * navigation. A digest nobody is holding gives the empty page rather than a
+   * refusal, because the ordinary reason to land here is having answered
+   * already.
+   *
+   * **No answer is given here.** The page carries no button and must not grow
+   * one: the token in this address reaches the assistant, so a control here
+   * could be operated by the thing being supervised.
+   */
+  async #renderPending(response: ServerResponse, digest: string): Promise<void> {
+    const status = await this.#options.getStatus()
+    const token = this.#secrets.accessToken
+    const disclaimer = this.#disclaimerFor('none')
+
+    // Nobody signed in means nothing can be waiting, and the sign-in form is
+    // the more useful answer than an empty preview.
+    if (!status.connected) {
+      await this.#render('overview', response)
+      return
+    }
+
+    const waiting = /^[0-9a-f]{64}$/.test(digest)
+      ? this.#options.getPending?.(digest)
+      : undefined
+
+    const page = waiting
+      ? pendingPage({ ...waiting, token, disclaimer })
+      : noPendingPage(token, disclaimer)
     this.#send(response, 200, 'text/html; charset=utf-8', page)
   }
 

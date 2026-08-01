@@ -48,6 +48,7 @@ import {
   composedBody,
   showRecipient,
   summariseQuote,
+  styleNotesOf,
   type Draft,
 } from '../mail/compose.js'
 import { canElicitForm } from './capabilities.js'
@@ -121,72 +122,115 @@ export function clientCanConfirm(ctx: unknown): boolean {
   return canElicitForm(ctx)
 }
 
-/** What the message would look like to the person being asked. */
-export function describeForConfirmation(draft: Draft, what: string): string {
+/**
+ * What the person being asked is shown.
+ *
+ * Short on purpose, and that is a correction rather than a compromise.
+ *
+ * It used to carry the excerpt, every address in full over two lines, every
+ * alt text and every attachment. Measured: 11 lines for a plain text message,
+ * 24 for a formatted one, **74 for a newsletter-shaped one**. Past a certain
+ * length the client's dialog could not be answered at all, because the button
+ * sat below the bottom of the window. A confirmation that cannot be answered
+ * does not protect anything; it stops the tool working, and the length was the
+ * cause.
+ *
+ * The correction is not to show less. It is to show it somewhere with room.
+ * The evidence moved to a page in the local interface, and what is left here is
+ * what somebody needs in order to decide whether to go and look:
+ *
+ * - **Every recipient, never shortened.** This is the one thing that cannot be
+ *   summarised. Seeing three of eight means agreeing to a send to five
+ *   strangers, and an address nobody expects is exactly what would be hidden in
+ *   the part that got cut. They go on one line each for To, Cc and Bcc rather
+ *   than one line per address, which costs two or three lines, not thirty.
+ * - **The subject**, because it is how a person recognises which message this
+ *   is at all.
+ * - **Where to read the rest**, and a plain statement that this is where the
+ *   addresses are.
+ *
+ * No body, no links, no alt texts. Not because they stopped mattering: because
+ * a wall of them is how the answer became unreachable, and half a wall read
+ * halfway is worse than a sentence that says where to look.
+ */
+export function describeForConfirmation(draft: Draft, what: string, previewUrl?: string): string {
   const lines = [
     `${what} would be sent from ${showRecipient(draft.from)}.`,
     '',
     describeRecipients(draft),
     `Subject: ${draft.subject || '(no subject)'}`,
-    '',
-    'The message begins:',
-    firstLines(composedBody(draft)),
   ]
 
-  // A quoted message is named rather than listed. Measured on a real mailbox:
-  // four images per message on average and up to thirty links. Listing those
-  // would bury the two addresses the sender is answering for under thirty that
-  // arrived in their mailbox anyway, and a confirmation nobody reads to the end
-  // protects nobody.
-  const quoted = summariseQuote(draft)
-  if (quoted) {
+  const counts = countsFor(draft)
+  if (counts) lines.push('', counts)
+
+  // The one part of this text meant to stop somebody rather than inform them.
+  //
+  // It appears whenever the wider markup level was used at all, not only when
+  // something was demonstrably hidden. Whether a value hides anything depends
+  // on where it sits, and a warning clever enough to judge that is a warning
+  // that will be wrong once, in the direction nobody wants.
+  const notes = styleNotesOf(draft)
+  if (notes.length > 0) {
+    const hiding = notes.filter((n) => n.hides)
     lines.push(
       '',
-      `Below that, the message being answered is quoted as it was written, with ` +
-        `${quoted.links} link(s) and ${quoted.images} image(s) of its own. Those are not listed ` +
-        'here: they arrived in your mailbox already, and the addresses shown below are the ones ' +
-        'this message adds.',
+      '!!! THIS MESSAGE USES MARKUP THAT CAN HIDE CONTENT !!!',
+      '',
+      hiding.length > 0
+        ? `${notes.length} unusual propert(ies) were used, and ${hiding.length} of them put ` +
+          'something out of sight. What a recipient sees is not what this message says it is.'
+        : `${notes.length} unusual propert(ies) were used. None of them hides anything by ` +
+          'itself, but they are the ones that can.',
+      'Open the preview and look before answering. It names every one, its value and where it sat.',
     )
   }
 
-  // Everything below is shown in full and never shortened. The excerpt above
-  // stops after a few lines, and an address on line thirty is exactly where one
-  // would be put in order not to be read.
-  const urls = describeUrls(draft)
-  if (urls.length) {
-    lines.push('', `Every address in this message (${urls.length}):`)
-    for (const url of urls) {
-      const shown = url.kind === 'link' ? `shown as "${url.label || '(no text)'}"` : `image${url.label ? `, described as "${url.label}"` : ''}`
-      lines.push(`  ${url.url}`, `      ${shown}`)
-    }
+  if (previewUrl) {
     lines.push(
-      '  A link\'s text and its address are two different things. Read the addresses.',
+      '',
+      'Read it as the recipient will see it, with every address in full:',
+      `  ${previewUrl}`,
+    )
+  } else {
+    // No interface running. Saying so is the honest move: the question is
+    // being asked with less behind it than usual, and a person should know
+    // that before answering it.
+    lines.push(
+      '',
+      'The configuration interface is not running, so the message cannot be shown in full.',
     )
   }
 
-  // Measured: an image's alt text is what a recipient reads, because clients
-  // block remote images by default, and it never appears in the body above.
-  const hidden = hiddenTextOf(draft)
-  if (hidden.length) {
-    lines.push('', 'Text a recipient can read that is not in the body above:')
-    for (const entry of hidden) lines.push(`  ${entry}`)
-  }
-
-  if (quoted?.hiddenText.length) {
-    lines.push('', `The quoted message also carries ${quoted.hiddenText.length} alt text(s) or titles.`)
-  }
-
-  const files = describeAttachments(draft)
-  if (files.length) {
-    lines.push('', `Carried with it (${files.length}):`)
-    for (const file of files) lines.push(`  ${file}`)
-  }
-
-  lines.push(
-    '',
-    'Sending cannot be undone. Confirm only if these recipients are the ones you meant.',
-  )
+  lines.push('', 'Sending cannot be undone. Confirm only if these recipients are the ones you meant.')
   return lines.join('\n')
+}
+
+/**
+ * One line saying what the message carries.
+ *
+ * Counts rather than contents. It exists so that the question is not silent
+ * about a message being more than it looks: eighteen links and a carried file
+ * are worth knowing about before deciding whether to open the preview at all.
+ */
+function countsFor(draft: Draft): string | undefined {
+  const urls = describeUrls(draft)
+  const hidden = hiddenTextOf(draft)
+  const files = describeAttachments(draft)
+  const quoted = summariseQuote(draft)
+
+  const parts: string[] = []
+  if (urls.length) parts.push(`${urls.length} address(es)`)
+  if (hidden.length) parts.push(`${hidden.length} piece(s) of text the body does not show`)
+  if (files.length) parts.push(`${files.length} carried file(s)`)
+  if (quoted) parts.push('a quoted message')
+
+  if (!parts.length) return undefined
+  const list =
+    parts.length === 1
+      ? parts[0]
+      : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+  return `It carries ${list}.`
 }
 
 /** The question, returned from the handler rather than pushed to the client. */
@@ -194,19 +238,22 @@ export function confirmationRequest(
   draft: Draft,
   what: string,
   requestState: string,
+  previewUrl?: string,
 ): InputRequiredResult {
   return inputRequired({
     requestState,
     inputRequests: {
       [CONFIRM_KEY]: inputRequired.elicit({
-        message: describeForConfirmation(draft, what),
+        message: describeForConfirmation(draft, what, previewUrl),
         requestedSchema: {
           type: 'object',
           properties: {
             confirm: {
               type: 'boolean',
               title: 'Send this message',
-              description: 'Tick only if the recipients above are the ones you meant.',
+              description: previewUrl
+                ? 'Tick only after reading it at the address above.'
+                : 'Tick only if the recipients above are the ones you meant.',
             },
           },
           required: ['confirm'],

@@ -15,7 +15,13 @@
 import MailComposer from 'nodemailer/lib/mail-composer/index.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { BridgeError } from '../bridge/errors.js'
-import { assertSendableMarkup, readMarkup, type MarkupUrl } from './markup.js'
+import {
+  assertSendableMarkup,
+  readMarkup,
+  type MarkupUrl,
+  type MarkupLevel,
+  type StyleNote,
+} from './markup.js'
 import { prepareQuotedMarkup } from './quote.js'
 import { htmlToText } from '../mime/parse.js'
 
@@ -38,6 +44,15 @@ export interface Draft {
   references?: string[]
   /** Our own Message-ID. Minted here so there is a handle straight away. */
   messageId: string
+  /**
+   * How much markup this message may carry. Absent means `standard`.
+   *
+   * Part of the draft rather than a parameter beside it, because it decides
+   * what the message is allowed to contain and therefore belongs to the same
+   * thing the digest covers. A message agreed to at one level must not be sent
+   * at another.
+   */
+  markupLevel?: MarkupLevel
   /** A whole message carried along, used when forwarding. */
   attachedMessage?: { filename: string; raw: Buffer }
   /**
@@ -177,7 +192,7 @@ export async function buildMessage(
   } else {
     // Checked here rather than only at the tool, so that no path into this
     // function can produce a message whose markup was never read.
-    const reading = assertSendableMarkup(draft.html)
+    const reading = assertSendableMarkup(draft.html, draft.markupLevel ?? 'standard')
 
     // Every content id the markup points at has to have arrived with it. A
     // reference to a part that is not there shows the recipient a broken image
@@ -422,6 +437,28 @@ export const MARKUP_NOTE =
   'confirmation shows every address in the message in full, including the ones behind links and ' +
   'images, and every alt text, because those are what a recipient reads.'
 
+/**
+ * What a caller is told about the two levels.
+ *
+ * Written to be read by something that will otherwise reach for the wider one
+ * out of convenience. The cost is stated in terms of what the user sees,
+ * because that is the part a model can reason about: at `extended` the person
+ * being asked gets a warning telling them to go and look, every time, whether
+ * or not anything was actually hidden.
+ */
+export const MARKUP_LEVEL_NOTE =
+  'The markupLevel field decides how much is permitted. "standard" is the default and covers ' +
+  'ordinary formatted mail: colour, background, font, alignment, spacing, borders and size. ' +
+  '"extended" permits every CSS property, including ones that can put content out of sight such ' +
+  'as display, visibility, opacity and position. **Prefer "standard".** At "extended" the ' +
+  'confirmation carries a prominent warning telling the person to open the preview before ' +
+  'answering, and the preview lists every property used, its value and the element it sat on. ' +
+  'That warning appears whether or not anything was really hidden, so reaching for "extended" ' +
+  'without needing it makes every send noisier and trains people to click past a warning that ' +
+  'matters. Use it when the user asked for something that needs it, or when there is genuinely ' +
+  'no other way, and say which of the two it was. One common case: a link cannot fill its own ' +
+  'padding without display:inline-block, so a proper button needs "extended".'
+
 export const PLAIN_TEXT_NOTE =
   'The body is plain text and markup is not interpreted. HTML written here is delivered as ' +
   'visible characters, so the recipient would read the tags rather than see formatting. ' +
@@ -504,15 +541,32 @@ export function describeAttachments(draft: Draft): string[] {
 
 /** The addresses in a message's markup, with the text they are shown as. */
 export function describeUrls(draft: Draft): MarkupUrl[] {
-  return draft.html === undefined ? [] : assertSendableMarkup(draft.html).urls
+  return draft.html === undefined
+    ? []
+    : assertSendableMarkup(draft.html, draft.markupLevel ?? 'standard').urls
 }
 
 /** Text a recipient can read that the readable body leaves out. */
 export function hiddenTextOf(draft: Draft): string[] {
-  return draft.html === undefined ? [] : assertSendableMarkup(draft.html).hiddenText
+  return draft.html === undefined
+    ? []
+    : assertSendableMarkup(draft.html, draft.markupLevel ?? 'standard').hiddenText
 }
 
 /** A fingerprint of a file, so a confirmation can be bound to its contents. */
 export function fingerprintPart(content: Buffer): string {
   return createHash('sha256').update(content).digest('hex').slice(0, 16)
+}
+
+/**
+ * The properties this message uses that are worth mentioning before it is sent.
+ *
+ * Empty at markup level `standard`, because nothing outside the ordinary set
+ * gets that far. At `extended` it is what the confirmation warns about and the
+ * preview lists, and it is the reason the level is worth having: the answer to
+ * "what did it use" is a list rather than a promise.
+ */
+export function styleNotesOf(draft: Draft): StyleNote[] {
+  if (draft.html === undefined) return []
+  return assertSendableMarkup(draft.html, draft.markupLevel ?? 'standard').styleNotes
 }

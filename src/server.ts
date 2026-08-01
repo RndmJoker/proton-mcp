@@ -37,8 +37,10 @@ import { registerDraftTools } from './tools/drafts.js'
 import { registerSendTools } from './tools/send.js'
 import type { PendingSend } from './tools/confirm.js'
 import { setSignInHint, setLockedCheck } from './tools/failures.js'
+import { pendingView } from './tools/pending-view.js'
 import { setHandshakeCapabilities } from './tools/capabilities.js'
 import { registerGuidance, INSTRUCTIONS } from './tools/guidance.js'
+import { registerUpdateTool } from './tools/updates.js'
 import { waitForIdle } from './in-flight.js'
 
 // The version number lives in package.json only.
@@ -223,6 +225,9 @@ async function main(): Promise<void> {
             return undefined
           },
         }),
+    // The message behind an open confirmation, for the page that shows it.
+    // Held in memory by preview.ts and dropped as soon as the answer arrives.
+    getPending: (digest) => pendingView(digest),
     noticeDismissed: () => settings.noticeDismissed === true,
     onDismissNotice: async () => {
       settings.noticeDismissed = true
@@ -335,6 +340,7 @@ async function main(): Promise<void> {
       },
     )
     registerGuidance(server)
+    registerUpdateTool(server, VERSION)
     registerListFolders(server, connection)
     registerMessageTools(server, connection)
     // Read as a function rather than a value: whether the server may write is a

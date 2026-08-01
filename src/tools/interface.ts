@@ -38,9 +38,13 @@ export function registerInterfaceTool(server: McpServer, info: InterfaceInfo): v
       title: 'Open the configuration interface',
       description:
         'Returns the address of the local configuration interface, which runs for as long as this ' +
-        'server does. Use it when the user asks how to sign in, where to change settings, or when ' +
-        'another tool reports that no credentials are available. The address contains an access ' +
-        'token and changes every time the server restarts.',
+        'server does and is where everything about this server can be seen and changed. Give it ' +
+        'to the user whenever they ask for the interface, the panel, the settings, the web page, ' +
+        'the address or the link, however they phrase it, and also when they ask where to sign ' +
+        'in, where to see what has been sent, where the folders are listed, or when another tool ' +
+        'reports that no credentials are available. The address contains an access token and ' +
+        'changes every time the server restarts, so it cannot be remembered from an earlier ' +
+        'conversation and has to be asked for again.',
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

@@ -46,6 +46,8 @@ import {
   refuse,
   type PendingSend,
 } from './confirm.js'
+import { holdForPreview, releasePreview } from './preview.js'
+import { previewUrl } from './failures.js'
 import { describeFailure, withSignIn } from './failures.js'
 import { track } from '../in-flight.js'
 
@@ -146,11 +148,20 @@ async function confirmed(
     // First round. Nothing is sent here under any circumstances.
     if (!clientCanConfirm(ctx)) return refuse.noElicitation()
     const state = await deps.codec.mint({ tool, digest }, ctx as never)
-    return confirmationRequest(draft, what, state)
+    // Held so the interface can show the message while the question is open.
+    // Memory only, and dropped the moment an answer arrives either way.
+    holdForPreview(digest, draft, tool)
+    return confirmationRequest(draft, what, state, previewUrl(digest))
   }
 
   // Second round. The seal has already been verified by the SDK, so what is
   // left is whether it says the same thing this call is asking for.
+  //
+  // The preview is released before any of those checks, and before the send.
+  // A refused confirmation has no more business staying readable than a
+  // completed one, and an early return must not leave decrypted mail behind.
+  releasePreview(digest)
+
   if (pending.tool !== tool) return refuse.wrongTool()
   if (pending.digest !== digest) return refuse.changed()
   if (confirmationAnswer(ctx) !== 'yes') return refuse.declined()
@@ -192,6 +203,16 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
               'point at a full address; anything outside the permitted set is refused with a ' +
               'reason rather than removed.',
           ),
+        markupLevel: z
+          .enum(['standard', 'extended'])
+          .default('standard')
+          .describe(
+            'How much markup is permitted. "standard" covers ordinary formatted mail. ' +
+              '"extended" permits every CSS property, including ones that can hide content, and ' +
+              'makes the confirmation carry a warning telling the person to open the preview. ' +
+              'Prefer "standard"; reach for "extended" only when asked for something that needs ' +
+              'it, such as a button, which requires display:inline-block.',
+          ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -219,7 +240,9 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
                   // read `text` and get something true.
                   text: input.html !== undefined ? htmlToText(input.html) : input.text,
                   messageId: mintMessageId(from.address),
-                  ...(input.html !== undefined ? { html: input.html } : {}),
+                  ...(input.html !== undefined
+                    ? { html: input.html, markupLevel: input.markupLevel }
+                    : {}),
                 }
               })
             } catch (error) {
@@ -254,6 +277,16 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
               'below it either way. The quote is always built from the original\'s text, never ' +
               'from its own markup, so a message full of markup this server would not send can ' +
               'still be replied to or forwarded.',
+          ),
+        markupLevel: z
+          .enum(['standard', 'extended'])
+          .default('standard')
+          .describe(
+            'How much markup is permitted. "standard" covers ordinary formatted mail. ' +
+              '"extended" permits every CSS property, including ones that can hide content, and ' +
+              'makes the confirmation carry a warning telling the person to open the preview. ' +
+              'Prefer "standard"; reach for "extended" only when asked for something that needs ' +
+              'it, such as a button, which requires display:inline-block.',
           ),
         mailbox: z.string().optional().describe('The mailbox the original is in, if known.'),
       }),
@@ -298,6 +331,16 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
               'below it either way. The quote is always built from the original\'s text, never ' +
               'from its own markup, so a message full of markup this server would not send can ' +
               'still be replied to or forwarded.',
+          ),
+        markupLevel: z
+          .enum(['standard', 'extended'])
+          .default('standard')
+          .describe(
+            'How much markup is permitted. "standard" covers ordinary formatted mail. ' +
+              '"extended" permits every CSS property, including ones that can hide content, and ' +
+              'makes the confirmation carry a warning telling the person to open the preview. ' +
+              'Prefer "standard"; reach for "extended" only when asked for something that needs ' +
+              'it, such as a button, which requires display:inline-block.',
           ),
         mailbox: z.string().optional().describe('The mailbox the original is in, if known.'),
       }),

@@ -64,6 +64,29 @@ export function signInUrl(): string | undefined {
   return signInHint?.()
 }
 
+/**
+ * Where a message waiting for confirmation can be read.
+ *
+ * Built from the same address as the sign-in hint, which already carries the
+ * access token: the interface refuses anything without it, so a link that
+ * dropped the token would lead to a refusal page rather than to the message.
+ *
+ * Returns nothing when no interface is running. The confirmation then says so
+ * rather than offering a link that goes nowhere, because a question asked with
+ * less behind it than usual should say as much.
+ */
+export function previewUrl(digest: string): string | undefined {
+  const base = signInHint?.()
+  if (!base) return undefined
+  try {
+    const url = new URL(base)
+    url.pathname = `/pending/${digest}`
+    return url.toString()
+  } catch {
+    return undefined
+  }
+}
+
 /** Which of the two situations the caller is in. */
 export async function missingCredentials(): Promise<MissingCredentials> {
   try {

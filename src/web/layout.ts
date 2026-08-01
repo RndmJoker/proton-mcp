@@ -478,7 +478,41 @@ const STYLES = `
   .blocked { font-size: 13px; margin: 6px 0; color: var(--bad-text); }
   .blocked::before { content: "Not available here: "; font-weight: 600; }
 
+  /*
+   * The message waiting to be sent.
+   *
+   * White regardless of the colour scheme, because that is the sheet a mail
+   * client puts it on. Showing it on a dark background would mean previewing a
+   * different message than the one that arrives.
+   */
+  .preview {
+    display: block;
+    width: 100%;
+    height: 460px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+  }
+  .preview-text {
+    margin: 0;
+    padding: 14px 16px;
+    max-height: 460px;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--code);
+    font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
   table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  /* Address tables carry three columns and long values; the 40 % label column
+   * of the definition tables would squeeze them. */
+  table.wide th { width: auto; }
+  table.wide td:first-child { word-break: break-all; }
+  ul { margin: 8px 0; padding-left: 20px; font-size: 14px; }
+  li { margin: 4px 0; }
   th, td { text-align: left; padding: 9px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
   tr:last-child th, tr:last-child td { border-bottom: 0; }
   th { color: var(--muted); font-weight: 500; width: 40%; }
