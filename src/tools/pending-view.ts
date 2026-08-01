@@ -20,6 +20,7 @@ import {
   describeUrls,
   hiddenTextOf,
   summariseQuote,
+  styleNotesOf,
   showRecipient,
   type Draft,
 } from '../mail/compose.js'
@@ -39,6 +40,7 @@ export interface PendingView {
   hiddenText: string[]
   attachments: string[]
   quoted?: { links: number; images: number; hiddenText: number }
+  styleNotes: Array<{ property: string; value: string; element: string; hides: boolean }>
 }
 
 /**
@@ -76,6 +78,7 @@ export function pendingView(digest: string): PendingView | undefined {
     urls: describeUrls(draft).map((u) => ({ url: u.url, label: u.label, kind: u.kind })),
     hiddenText: hiddenTextOf(draft),
     attachments: describeAttachments(draft),
+    styleNotes: styleNotesOf(draft),
     ...(quote
       ? {
           quoted: {
