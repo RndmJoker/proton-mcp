@@ -70,8 +70,20 @@ characters and the recipient reads the tags.
 
 Headings, paragraphs, line breaks, rules, quotes, emphasis, lists, tables, links
 and images. Styling by colour, background, font, size, weight, alignment,
-spacing and borders. Images may point at a full address or at a file carried
-inside the message.
+spacing and borders.
+
+**Images work, and the usual way is a plain web address.** An \`<img>\` pointing
+at \`https://…\` is permitted with no restrictions on where it comes from, at any
+size, inside a link, with rounded corners. **An animated GIF is permitted too**,
+and it is one of the few things that really does animate in a mail client, since
+CSS animation does not survive most of them.
+
+The one refusal is a \`data:\` address, which would carry an entire file inside
+the markup where nothing lists it as an attachment.
+
+What is *not* possible is attaching a file from this machine; see Attachments
+below. That is a separate thing from showing an image, and confusing the two
+leads to writing a plainer message than necessary.
 
 Anything else is **refused, not quietly removed**, and the answer names what and
 why. A message that was silently altered is no longer the message anyone agreed
@@ -134,8 +146,16 @@ in the thread. If threading matters, use \`send_reply\` rather than
 
 A message cannot be given a file from this machine. That is a decision that has
 not been made rather than a feature that is missing: which paths a model may
-reach is its own question. Forwarding loses nothing regardless, because the
-original travels along whole when it carries attachments.
+reach is its own question.
+
+**This does not stop a message from showing images.** An image at a web address
+needs no attachment at all, and that is how almost every formatted message does
+it. Only a file that would travel inside the message is unavailable.
+
+\`cid:\` addresses are permitted and refer to a file the message already carries.
+When composing a new message there is none, so a \`cid:\` reference has nothing
+to point at. Where they do work is a forward: the original travels along whole,
+attachments and embedded images included, so nothing is lost there.
 `
 
 const BRIDGE_GUIDE = `# How the Bridge behaves
