@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { registerSendTools } from '../../src/tools/send.js'
 import { CONFIRM_KEY } from '../../src/tools/confirm.js'
-import { _clearSignInHint } from '../../src/tools/failures.js'
+import { _clearSignInHint, setSignInHint } from '../../src/tools/failures.js'
+import { previewOf, pendingCount, _reset as resetPreviews } from '../../src/tools/preview.js'
 import type { McpServer } from '@modelcontextprotocol/server'
 import type { Connection } from '../../src/bridge/connection.js'
 import type { Config } from '../../src/config.js'
@@ -97,6 +98,7 @@ const MESSAGE = { to: ['you@example.com'], subject: 'Hello', text: 'Text' }
 beforeEach(() => {
   sent.length = 0
   _clearSignInHint()
+  resetPreviews()
 })
 
 describe('the first call never sends', () => {
@@ -272,5 +274,76 @@ describe('without a sign-in there is nothing to send from', () => {
     const result = await handlers.get('send_message')!(MESSAGE, capable())
     expect(sent).toEqual([])
     expect(result.isError).toBe(true)
+  })
+})
+
+
+describe('the message held for the preview', () => {
+  /**
+   * Why this is a security test.
+   *
+   * The confirmation no longer carries the message; it points at a page that
+   * does. That page needs the composed message while the question is open, so
+   * for the first time this server holds decrypted mail somewhere other than
+   * the call that is using it. Everything about how long it stays is therefore
+   * a promise, and these are the tests that keep it.
+   */
+  it('is readable while the question is open', async () => {
+    const { handlers, minted } = register()
+    setSignInHint(() => 'http://127.0.0.1:7345/?token=abc')
+
+    await handlers.get('send_message')!(MESSAGE, capable())
+    expect(minted).toHaveLength(1)
+    expect(previewOf(minted[0]!.digest)).toBeDefined()
+  })
+
+  it('is gone once the answer is yes', async () => {
+    const { handlers, minted } = register()
+    const first = (await handlers.get('send_message')!(MESSAGE, capable())) as Result
+    const state = first.requestState as string
+
+    await handlers.get('send_message')!(MESSAGE, answered(state))
+    expect(sent).toHaveLength(1)
+    // Decrypted mail must not outlive the question it was held for.
+    expect(previewOf(minted[0]!.digest)).toBeUndefined()
+    expect(pendingCount()).toBe(0)
+  })
+
+  it('is gone once the answer is no', async () => {
+    // A declined send has no more business staying readable than a completed
+    // one. This is the case an early return would quietly skip.
+    const { handlers, minted } = register()
+    const first = (await handlers.get('send_message')!(MESSAGE, capable())) as Result
+    const state = first.requestState as string
+
+    await handlers.get('send_message')!(MESSAGE, answered(state, false))
+    expect(sent).toHaveLength(0)
+    expect(previewOf(minted[0]!.digest)).toBeUndefined()
+    expect(pendingCount()).toBe(0)
+  })
+
+  it('is gone even when the second round is refused for another reason', async () => {
+    // The seal says one tool, the call is another. The refusal happens before
+    // anything is sent, and the held message must still be dropped.
+    const { handlers, minted } = register()
+    const first = (await handlers.get('send_message')!(MESSAGE, capable())) as Result
+    const state = JSON.stringify({
+      ...JSON.parse(first.requestState as string),
+      tool: 'send_reply',
+    })
+
+    await handlers.get('send_message')!(MESSAGE, answered(state))
+    expect(sent).toHaveLength(0)
+    expect(previewOf(minted[0]!.digest)).toBeUndefined()
+  })
+
+  it('does not pile up when nobody ever answers', async () => {
+    // A caller that asks and never answers must not be able to fill memory
+    // with decrypted mail.
+    const { handlers } = register()
+    for (let i = 0; i < 20; i += 1) {
+      await handlers.get('send_message')!({ ...MESSAGE, subject: `Hello ${i}` }, capable())
+    }
+    expect(pendingCount()).toBeLessThanOrEqual(8)
   })
 })

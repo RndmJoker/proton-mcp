@@ -144,12 +144,18 @@ describe('the preview shows what the body does not', () => {
     // An address on line thirty is exactly where one would be put in order not
     // to be read, so the list is never cut. The page has room for it, which is
     // the whole reason the evidence lives here now.
+    //
+    // Checked against the table alone, not the whole page: the rendered frame
+    // repeats the message and therefore every address in it, so a search over
+    // the whole document passes even with the table cut to three rows. Measured
+    // by cutting it, which is how this test came to be written this way.
     const links = Array.from(
       { length: 12 },
       (_, i) => `<p>line ${i}</p><a href="https://example.invalid/${i}">link ${i}</a>`,
     ).join('')
-    const shown = previewFor(withHtml(links))
-    for (let i = 0; i < 12; i += 1) expect(shown).toContain(`https://example.invalid/${i}`)
+    const table = previewFor(withHtml(links)).split('<h2>Every address in it')[1] ?? ''
+    expect(table).not.toBe('')
+    for (let i = 0; i < 12; i += 1) expect(table).toContain(`https://example.invalid/${i}`)
   })
 
   it('renders the message in a frame that can do nothing', () => {
