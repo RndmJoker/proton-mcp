@@ -166,14 +166,32 @@ describe('the preview shows what the body does not', () => {
     expect(shown).not.toMatch(/<iframe[^>]*sandbox="[^"]*allow-(scripts|same-origin)/)
   })
 
-  it('carries no button, because the token reaches the assistant', () => {
-    // open_configuration hands the address to the model. A control here could
-    // be operated by the thing being supervised, so the answer goes through
+  it('carries nothing that could answer the question', () => {
+    // open_configuration hands this address to the model, so a control here
+    // could be operated by the thing being supervised. The answer goes through
     // the client instead.
-    const shown = previewFor(withHtml('<p>Hello</p>'))
-    const main = shown.split('<main>')[1] ?? ''
-    expect(main).not.toContain('<button')
-    expect(main).not.toContain('<form')
+    //
+    // Checked with the dismissable notice present, because that is the state a
+    // real page is in and it carries the one button that is allowed to exist.
+    // Asserting "no button at all" passed only because the test happened to
+    // render the page without it.
+    const digest = digestOf(withHtml('<p>Hello</p>'))
+    resetPreviews()
+    holdForPreview(digest, withHtml('<p>Hello</p>'), 'send_message')
+    const view = pendingView(digest)
+    if (!view) throw new Error('the message was not held')
+    const shown = pendingPage({
+      ...view,
+      token: 'test-token',
+      disclaimer: { csrf: 'c', from: 'overview' },
+    })
+
+    const forms = [...shown.matchAll(/<form[^>]*action="([^"]*)"/g)].map((m) => m[1])
+    // Exactly one form, and it dismisses a paragraph.
+    expect(forms).toHaveLength(1)
+    expect(forms[0]).toContain('/dismiss-notice')
+    // Nothing that posts back to a sending path.
+    expect(shown).not.toMatch(/action="[^"]*(send|confirm|approve)/)
   })
 })
 
