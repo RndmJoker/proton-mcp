@@ -206,6 +206,16 @@ export function securityHeaders(): Record<string, string> {
       "form-action 'self'",
       "frame-ancestors 'none'",
       "base-uri 'none'",
+      // For the one page that shows a message waiting to be sent. The content
+      // is passed as srcdoc rather than fetched, so this permits an inline
+      // document and nothing from anywhere.
+      //
+      // What the frame inherits from this policy is the point of putting it
+      // here at all: img-src stays 'self' data: inside it, so a message full of
+      // remote images loads none of them. A tracking pixel in a message being
+      // previewed would tell its author that the message was looked at, and a
+      // preview must not be an event anybody outside gets to observe.
+      "frame-src 'self'",
     ].join('; '),
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',

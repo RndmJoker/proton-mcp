@@ -169,9 +169,22 @@ describe('describeForConfirmation', () => {
     expect(text).toContain('Subject: Subject')
   })
 
-  it('shows the beginning of the body', () => {
-    const text = describeForConfirmation(draft({ text: 'First line\nSecond line' }), 'This')
-    expect(text).toContain('First line')
+  it('carries no part of the message itself', () => {
+    // It used to show the first lines. That was right when the confirmation was
+    // the only thing anyone saw, and wrong once it grew past what a dialog can
+    // display: measured at 74 lines for a newsletter-shaped message, the button
+    // sat below the bottom of the window and the send could not be confirmed at
+    // all. The body moved to a page with room for it; what stays here is who it
+    // goes to and where to read it.
+    const text = describeForConfirmation(
+      draft({ text: 'First line\nSecond line' }),
+      'This',
+      'http://127.0.0.1:7345/pending/abc',
+    )
+    expect(text).not.toContain('First line')
+    expect(text).toContain('http://127.0.0.1:7345/pending/abc')
+    // What must never move: who it goes to.
+    expect(text).toContain('you@example.com')
   })
 
   it('says that sending cannot be undone', () => {

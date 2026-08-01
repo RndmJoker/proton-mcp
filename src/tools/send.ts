@@ -46,6 +46,8 @@ import {
   refuse,
   type PendingSend,
 } from './confirm.js'
+import { holdForPreview, releasePreview } from './preview.js'
+import { previewUrl } from './failures.js'
 import { describeFailure, withSignIn } from './failures.js'
 import { track } from '../in-flight.js'
 
@@ -146,11 +148,20 @@ async function confirmed(
     // First round. Nothing is sent here under any circumstances.
     if (!clientCanConfirm(ctx)) return refuse.noElicitation()
     const state = await deps.codec.mint({ tool, digest }, ctx as never)
-    return confirmationRequest(draft, what, state)
+    // Held so the interface can show the message while the question is open.
+    // Memory only, and dropped the moment an answer arrives either way.
+    holdForPreview(digest, draft, tool)
+    return confirmationRequest(draft, what, state, previewUrl(digest))
   }
 
   // Second round. The seal has already been verified by the SDK, so what is
   // left is whether it says the same thing this call is asking for.
+  //
+  // The preview is released before any of those checks, and before the send.
+  // A refused confirmation has no more business staying readable than a
+  // completed one, and an early return must not leave decrypted mail behind.
+  releasePreview(digest)
+
   if (pending.tool !== tool) return refuse.wrongTool()
   if (pending.digest !== digest) return refuse.changed()
   if (confirmationAnswer(ctx) !== 'yes') return refuse.declined()
