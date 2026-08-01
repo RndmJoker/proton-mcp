@@ -61,18 +61,34 @@ export const PERMITTED_TAGS = new Set([
   'a', 'img',
 ])
 
-/** Attributes each element may carry, on top of the ones allowed everywhere. */
+/**
+ * Attributes each element may carry, on top of the ones allowed everywhere.
+ *
+ * `role` and `aria-*` are here because leaving them out was a mistake rather
+ * than a policy. `role="presentation"` on a layout table is the standard way to
+ * write mail: without it a screen reader announces "table, three rows, two
+ * columns" for something that only centres a button. The attribute carries no
+ * behaviour and can hide nothing; refusing it made messages worse for the
+ * people who most need them to be well made.
+ *
+ * `class` and `id` are permitted for the opposite reason: they do nothing here,
+ * since a message may carry no `<style>` block, and some clients hang their own
+ * rules on them. There is nothing to protect by refusing them.
+ *
+ * `bgcolor` and `background` on table elements are old mail HTML that Outlook
+ * still needs, and both are colours rather than behaviour.
+ */
 const PERMITTED_ATTRIBUTES: Record<string, string[]> = {
-  '*': ['style', 'title', 'dir', 'lang'],
+  '*': ['style', 'title', 'dir', 'lang', 'role', 'class', 'id'],
   a: ['href', 'target', 'rel'],
-  img: ['src', 'alt', 'width', 'height'],
+  img: ['src', 'alt', 'width', 'height', 'border'],
   // height sits beside width rather than being an omission with a reason. A
   // table cell of a given height hides nothing: its content still renders, and
   // the properties that do hide are refused as styles further down.
-  table: ['width', 'height', 'border', 'cellpadding', 'cellspacing', 'align'],
-  td: ['colspan', 'rowspan', 'align', 'valign', 'width', 'height'],
-  th: ['colspan', 'rowspan', 'align', 'valign', 'width', 'height'],
-  tr: ['align', 'valign', 'height'],
+  table: ['width', 'height', 'border', 'cellpadding', 'cellspacing', 'align', 'bgcolor', 'background'],
+  td: ['colspan', 'rowspan', 'align', 'valign', 'width', 'height', 'bgcolor', 'background'],
+  th: ['colspan', 'rowspan', 'align', 'valign', 'width', 'height', 'bgcolor', 'background'],
+  tr: ['align', 'valign', 'height', 'bgcolor'],
   ol: ['start', 'type'],
   blockquote: ['cite'],
 }
@@ -344,14 +360,21 @@ export function readMarkup(html: string, level: MarkupLevel = 'standard'): Marku
         const allowed = [...(PERMITTED_ATTRIBUTES['*'] ?? []), ...(PERMITTED_ATTRIBUTES[tag] ?? [])]
         for (const [rawAttribute, value] of Object.entries(attributes)) {
           const attribute = rawAttribute.toLowerCase()
-          if (!allowed.includes(attribute)) {
+          // aria-* as a family rather than one by one. They describe a document
+          // to assistive technology and carry no behaviour, and listing them
+          // individually would mean this file goes stale every time the
+          // specification grows one.
+          if (!allowed.includes(attribute) && !attribute.startsWith('aria-')) {
             problems.push({
               found: `${attribute}="${String(value).slice(0, 30)}" on <${tag}>`,
               reason:
                 attribute.startsWith('on')
                   ? 'An event handler has no place in a message. No mail client runs it, and ' +
                     'what it contains would never be seen by anyone confirming the send.'
-                  : `<${tag}> may not carry "${attribute}" here.`,
+                  : `<${tag}> may not carry "${attribute}" here. Permitted are style, title, ` +
+                    'dir, lang, role, class, id and aria-*, plus what each element needs of its ' +
+                    'own. Markup level "extended" widens which style properties may be used, not ' +
+                    'which attributes exist.',
             })
             continue
           }

@@ -169,3 +169,60 @@ describe('what the person confirming is told', () => {
     expect(shown.split('\n').length).toBeLessThan(22)
   })
 })
+
+describe('attributes that make a message well made rather than dangerous', () => {
+  /**
+   * Leaving these out was a mistake rather than a policy, and it showed: an
+   * assistant reported that role and class were refused and dropped them, which
+   * quietly made the message worse for anyone using a screen reader.
+   */
+  it('permits role, which is how a layout table is written', () => {
+    // Without role="presentation" a screen reader announces "table, three rows,
+    // two columns" for something that only centres a button.
+    expect(() =>
+      assertSendableMarkup('<table role="presentation"><tr><td>x</td></tr></table>'),
+    ).not.toThrow()
+  })
+
+  it('permits the whole aria family rather than a list that goes stale', () => {
+    for (const attribute of ['aria-label', 'aria-hidden', 'aria-describedby', 'aria-live']) {
+      expect(() =>
+        assertSendableMarkup(`<a href="https://example.com" ${attribute}="x">link</a>`),
+        attribute,
+      ).not.toThrow()
+    }
+  })
+
+  it('permits class and id, which do nothing here and harm nothing', () => {
+    // A message may carry no style block, so neither can select anything. Some
+    // clients hang their own rules on them.
+    expect(() => assertSendableMarkup('<div class="wrapper" id="top">x</div>')).not.toThrow()
+  })
+
+  it('permits the old colour attributes that Outlook still needs', () => {
+    expect(() =>
+      assertSendableMarkup('<table bgcolor="#ffffff"><tr><td bgcolor="#6d4aff">x</td></tr></table>'),
+    ).not.toThrow()
+  })
+
+  it('still refuses what carries behaviour or reaches out of the message', () => {
+    // The distinction the list is drawn along: describing a document is fine,
+    // running in it or restyling what is around it is not.
+    expect(() => assertSendableMarkup('<style>p{color:red}</style>')).toThrow()
+    expect(() => assertSendableMarkup('<p onclick="bad()">x</p>')).toThrow()
+    expect(() => assertSendableMarkup('<p onmouseover="bad()">x</p>', 'extended')).toThrow()
+  })
+
+  it('says what is permitted when it refuses an attribute', () => {
+    // A refusal without a way forward is how an assistant ends up removing
+    // more than it had to.
+    try {
+      assertSendableMarkup('<p contenteditable="true">x</p>')
+      throw new Error('should have been refused')
+    } catch (error) {
+      const message = (error as Error).message
+      expect(message).toContain('role')
+      expect(message).toContain('aria-*')
+    }
+  })
+})
