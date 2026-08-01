@@ -35,6 +35,7 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `send_reply` | Replies and sends, keeping the conversation intact |
 | `send_forward` | Forwards and sends, attachments and all |
 | `send_draft` | Sends a draft that is already written |
+| `check_for_updates` | Asks npm whether a newer version exists. The only thing here that contacts anything but your own machine, and only when called |
 
 Every tool that composes a message takes either `text` or `html`, never both: Proton drops the plain text half of a message that carries markup, so the half you confirmed would be the half that never arrived.
 
@@ -104,7 +105,9 @@ Fetch https://raw.githubusercontent.com/RndmJoker/proton-mcp/main/prompt.md and 
 
 It checks the prerequisites, registers the server with your client and tells you what to do next. **It never asks for your Bridge password** and cannot: that goes into the local web interface, in your browser, and nowhere else.
 
-Later, to update:
+You can also just ask your assistant whether there is an update: the server has a `check_for_updates` tool that asks npm and reports what to do. It is the one thing in here that contacts anything other than your own machine, it runs only when called, it sends nothing about you, and it installs nothing.
+
+Or hand over the guide, the same way as for the installation:
 
 ```
 Fetch https://raw.githubusercontent.com/RndmJoker/proton-mcp/main/update.md and follow it
