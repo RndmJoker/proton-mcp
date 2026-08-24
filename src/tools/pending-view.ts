@@ -36,7 +36,7 @@ export interface PendingView {
   subject: string
   html?: string
   text?: string
-  urls: Array<{ url: string; label: string; kind: 'link' | 'image' }>
+  urls: Array<{ url: string; label: string; kind: 'link' | 'image' | 'style' }>
   hiddenText: string[]
   attachments: string[]
   quoted?: { links: number; images: number; hiddenText: number }
