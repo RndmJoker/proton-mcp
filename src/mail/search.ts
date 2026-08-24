@@ -39,9 +39,15 @@ export interface SearchCriteria {
   since?: Date
   /** Only messages before this date. */
   before?: Date
-  /** true for unread only, false for read only. */
+  /**
+   * Passed straight through as IMAP `SEEN`: true finds read messages, false
+   * finds unread ones. Leave it out to search both.
+   */
   seen?: boolean
-  /** Only starred messages. */
+  /**
+   * Passed straight through as IMAP `FLAGGED`: true finds starred messages,
+   * false finds unstarred ones. Leave it out to search both.
+   */
   flagged?: boolean
   /** Minimum size in bytes. */
   largerThan?: number

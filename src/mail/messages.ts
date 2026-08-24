@@ -50,7 +50,11 @@ export interface OrderingCost {
 
 export interface ListResult {
   path: string
-  /** Total number of messages in the mailbox, independent of paging. */
+  /**
+   * How many messages the query matched, independent of paging. With no filter
+   * that is the whole mailbox; with `unreadOnly` it is the unread ones, not the
+   * mailbox size.
+   */
   total: number
   offset: number
   headers: MessageHeader[]

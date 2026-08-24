@@ -177,9 +177,11 @@ const addressList = (what: string) =>
     .describe(`${what} Each entry is an address, optionally as "Display Name <name@example.com>".`)
 
 const CONFIRMATION_NOTE =
-  'Every send asks the user to confirm first, through the client, showing the final recipients, ' +
-  'the subject and the first lines. There is no way to switch that off, and a client that cannot ' +
-  'show the question cannot send at all.'
+  'Every send asks the user to confirm first, through the client, showing the sender, every ' +
+  'recipient separated into To, Cc and Bcc, and the subject. It carries no part of the message ' +
+  'itself and links to a page where the whole thing can be read as the recipient will see it. ' +
+  'There is no way to switch that off, and a client that cannot show the question cannot send ' +
+  'at all.'
 
 export function registerSendTools(server: McpServer, deps: SendDependencies): void {
   server.registerTool(
@@ -274,9 +276,11 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
           .optional()
           .describe(
             'Your part of the message as markup instead of plain text. The original is quoted ' +
-              'below it either way. The quote is always built from the original\'s text, never ' +
-              'from its own markup, so a message full of markup this server would not send can ' +
-              'still be replied to or forwarded.',
+              'below it either way. The quote keeps the original\'s own markup, character for ' +
+              'character, minus what would reach out of it: style blocks, document-level ' +
+              'elements, scripts and comments. A message this server would not itself compose ' +
+              'can therefore still be replied to or forwarded, but its formatting travels ' +
+              'along, and so does anything a link in it points at.',
           ),
         markupLevel: z
           .enum(['standard', 'extended'])
@@ -328,9 +332,11 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
           .optional()
           .describe(
             'Your part of the message as markup instead of plain text. The original is quoted ' +
-              'below it either way. The quote is always built from the original\'s text, never ' +
-              'from its own markup, so a message full of markup this server would not send can ' +
-              'still be replied to or forwarded.',
+              'below it either way. The quote keeps the original\'s own markup, character for ' +
+              'character, minus what would reach out of it: style blocks, document-level ' +
+              'elements, scripts and comments. A message this server would not itself compose ' +
+              'can therefore still be replied to or forwarded, but its formatting travels ' +
+              'along, and so does anything a link in it points at.',
           ),
         markupLevel: z
           .enum(['standard', 'extended'])

@@ -75,7 +75,11 @@ export const DEFAULT_WEB_PORT = 7345
 export const PORT_ATTEMPTS = 10
 
 export interface WebInterfaceOptions {
-  /** 0 lets the operating system pick a free port, which is the default. */
+  /**
+   * Left out, the interface starts at DEFAULT_WEB_PORT and walks upwards past
+   * anything already listening. 0 lets the operating system pick a free port,
+   * which the tests use to avoid collisions; it is not the default.
+   */
   port?: number
   /**
    * Called when the user signs in. Returns an error message to show, or nothing

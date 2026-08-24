@@ -112,7 +112,12 @@ export function releasePreview(digest: string): void {
   held.delete(digest)
 }
 
-/** How many are waiting. For the interface, which says so rather than guessing. */
+/**
+ * How many are waiting.
+ *
+ * Written for the interface to report rather than guess, and not wired up
+ * there yet: nothing under src/web calls this today.
+ */
 export function pendingCount(): number {
   dropStale()
   return held.size
