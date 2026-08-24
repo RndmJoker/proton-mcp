@@ -181,7 +181,7 @@ depends on how it was installed, and that is not obvious from the outside.
 Once the server is running it also documents itself. Two guides can be read
 through the connection, without asking anyone:
 
-- `proton-mcp://guide/writing` — composing messages, what markup is permitted,
+- `proton-mcp://guide/writing`: composing messages, what markup is permitted,
   what the confirmation shows, how replies quote the original
-- `proton-mcp://guide/bridge` — the measured behaviour of the Bridge, including
+- `proton-mcp://guide/bridge`: the measured behaviour of the Bridge, including
   how long each kind of write takes to settle

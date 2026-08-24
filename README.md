@@ -35,6 +35,7 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `send_reply` | Replies and sends, keeping the conversation intact |
 | `send_forward` | Forwards and sends, attachments and all |
 | `send_draft` | Sends a draft that is already written |
+| `open_configuration` | Hands back the address of the local web interface, with the token that opens it |
 | `check_for_updates` | Asks npm whether a newer version exists. The only thing here that contacts anything but your own machine, and only when called |
 
 Every tool that composes a message takes either `text` or `html`, never both: Proton drops the plain text half of a message that carries markup, so the half you confirmed would be the half that never arrived.
@@ -71,7 +72,7 @@ This table says what the server cannot do today. The issue behind each entry say
 | :--- | :--- |
 | Attachments composed from files on this machine | [#17](https://github.com/RndmJoker/proton-mcp/issues/17) |
 | Choosing per tool what an assistant may do | [#19](https://github.com/RndmJoker/proton-mcp/issues/19) |
-| Choosing how much markup a message may carry | [#24](https://github.com/RndmJoker/proton-mcp/issues/24) |
+| Choosing in the interface how much markup a message may carry. The levels exist and a caller picks one per message; what is missing is a ceiling the caller cannot raise | [#24](https://github.com/RndmJoker/proton-mcp/issues/24) |
 | A fixed extra recipient the assistant cannot remove | [#18](https://github.com/RndmJoker/proton-mcp/issues/18) |
 
 **Binary attachments** are missing from that table on purpose. They are not an unfinished feature waiting for its turn: `get_attachment` refuses anything that is not text and says why. Handing one over would mean either base64 in the context window, which is unusable, or writing decrypted content to your disk, which this server does not do. Changing that needs a decision first, not an implementation, so there is nothing to track yet.
@@ -255,7 +256,7 @@ The content of someone else's email is text written by strangers, and it is hand
 
 - **Message content is marked as untrusted** in every answer, enclosed in explicit markers and separated from anything the server itself says.
 - **Nothing is filtered out of the content** and no attempt is made to detect attacks. Such filters pretend to offer safety they cannot deliver.
-- **Sending will always require your confirmation**, enforced in the server rather than in a system prompt. There will be no switch to turn it off. Until sending exists at all, there is nothing to confirm.
+- **Sending always requires your confirmation**, enforced in the server rather than in a system prompt. There is no switch to turn it off, and a client that cannot ask the question cannot send.
 - **There will be no permanent deletion**, and no tools for filters, forwarding, account or key settings. A hijacked session must not be able to leave behind lasting access.
 - **HTML is never passed through raw** and external content is never fetched. Tracking pixels stay ineffective.
 - **No message ever touches your disk.** No cache, no index, no copies. Anything this server wrote down would be your mail in plain text, outside the encryption you pay Proton for.
@@ -363,14 +364,14 @@ The one moment this cannot protect you is the very first connection, which is wh
 | Area | Choice |
 | :--- | :--- |
 | Language | TypeScript, Node.js 24 or newer |
-| MCP | `@modelcontextprotocol/server` v2, specification 2026-07-28 |
+| MCP | `@modelcontextprotocol/server` v2. Its newest protocol revision is 2025-11-25; the parts of 2026-07-28 this server prepares for are read defensively, see the comment in `src/tools/capabilities.ts` |
 | IMAP | `imapflow` |
 | MIME | `mailparser`, `html-to-text` |
-| SMTP | `nodemailer`, for sending once it exists |
+| SMTP | `nodemailer` |
 | Schemas | `zod` |
 | Tests | Vitest, `node` environment |
 
-Every dependency is MIT or MIT-0, except `deepmerge-ts` which is BSD-3-Clause. All permissive.
+Every dependency that ships is permissive: mostly MIT, with MIT-0 (`nodemailer`), BSD-2-Clause (the `htmlparser2` family), BSD-3-Clause (`deepmerge-ts`), ISC (`split2`) and one dual `MIT OR EUPL-1.1+` (`@zone-eu/mailsplit`). Development dependencies add Apache-2.0 and MPL-2.0.
 
 ```bash
 npm run build         # compile into dist/
@@ -393,6 +394,8 @@ src/
 ├── tools/        the MCP tools and their output formatting
 ├── web/          the local interface and its security layer
 ├── activity.ts   what is running and what ran, in memory only
+├── config.ts     the environment variables, read once at startup
+├── in-flight.ts  the counter that holds shutdown until answers are out
 ├── session.ts    whether we are signed in, and where from
 ├── settings.ts   the Bridge ports, when changed in the interface
 └── server.ts     entry point and transport
