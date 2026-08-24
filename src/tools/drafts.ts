@@ -95,9 +95,7 @@ export function registerDraftTools(
     {
       title: 'Create a draft',
       description:
-        'Writes a new draft into the Drafts mailbox. Nothing is sent. The draft is plain text: ' +
-        'Proton drops the plain text part of a message that also carries HTML, so composing HTML ' +
-        'would mean the recipient sees something other than what was written here. ' +
+        'Writes a new draft into the Drafts mailbox. Nothing is sent. ' +
         'Attachments from files on this machine are not supported on purpose. ' +
         PLAIN_TEXT_NOTE + ' ' + MARKUP_NOTE + ' ' + UTF8_NOTE,
       inputSchema: z.object({
@@ -227,9 +225,11 @@ export function registerDraftTools(
           .optional()
           .describe(
             'Your part of the message as markup instead of plain text. The original is quoted ' +
-              'below it either way. The quote is always built from the original\'s text, never ' +
-              'from its own markup, so a message full of markup this server would not send can ' +
-              'still be replied to or forwarded.',
+              'below it either way. The quote keeps the original\'s own markup, character for ' +
+              'character, minus what would reach out of it: style blocks, document-level ' +
+              'elements, scripts and comments. A message this server would not itself compose ' +
+              'can therefore still be replied to or forwarded, but its formatting travels ' +
+              'along, and so does anything a link in it points at.',
           ),
         markupLevel: z
           .enum(['standard', 'extended'])
@@ -285,9 +285,11 @@ export function registerDraftTools(
           .optional()
           .describe(
             'Your part of the message as markup instead of plain text. The original is quoted ' +
-              'below it either way. The quote is always built from the original\'s text, never ' +
-              'from its own markup, so a message full of markup this server would not send can ' +
-              'still be replied to or forwarded.',
+              'below it either way. The quote keeps the original\'s own markup, character for ' +
+              'character, minus what would reach out of it: style blocks, document-level ' +
+              'elements, scripts and comments. A message this server would not itself compose ' +
+              'can therefore still be replied to or forwarded, but its formatting travels ' +
+              'along, and so does anything a link in it points at.',
           ),
         markupLevel: z
           .enum(['standard', 'extended'])

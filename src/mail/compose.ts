@@ -48,9 +48,14 @@ export interface Draft {
    * How much markup this message may carry. Absent means `standard`.
    *
    * Part of the draft rather than a parameter beside it, because it decides
-   * what the message is allowed to contain and therefore belongs to the same
-   * thing the digest covers. A message agreed to at one level must not be sent
-   * at another.
+   * what the message is allowed to contain.
+   *
+   * Note what the digest does and does not bind: it covers `html` as source
+   * text, so the markup itself cannot be swapped after the answer, but it does
+   * not carry the level. That holds today only because a wider level merely
+   * permits more of the same string. Anything that makes the level change what
+   * goes out, rather than what is allowed in, has to be added to `digestOf`
+   * first.
    */
   markupLevel?: MarkupLevel
   /** A whole message carried along, used when forwarding. */
@@ -285,7 +290,14 @@ function quoteHeader(original: { from: Recipient[]; date: Date | undefined }): s
   return `On ${escapeHtml(when)}, ${escapeHtml(who)} wrote:`
 }
 
-/** Turns text into markup that says exactly what the text said. */
+/**
+ * Turns text into markup that says exactly what the text said.
+ *
+ * For element content. It does not escape the apostrophe, so it is not safe for
+ * a single-quoted attribute value; every caller here puts the result between
+ * tags. The interface has its own escapeHtml which does cover it, for markup it
+ * builds with attributes.
+ */
 export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -294,27 +306,6 @@ export function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;')
 }
 
-/**
- * Quotes a message inside a formatted reply.
- *
- * **The quote is built from the original's text, never from its markup**, and
- * that is the whole design rather than a shortcut. Two reasons, and the second
- * is the one that matters:
- *
- * 1. Carrying the original's markup would mean checking a stranger's HTML
- *    against the permitted set and refusing the reply when it fails. Ordinary
- *    mail is full of `<style>` blocks, so replying to real messages would
- *    mostly not work.
- * 2. It would put markup written by somebody else into a message sent under
- *    this account's name. A link in the quote could show one thing and go
- *    somewhere else, and it would ride along into the reply without anybody
- *    having written it.
- *
- * The text comes from the same conversion this server uses to read a message,
- * so a link in the original appears as its address in the quote. A phishing
- * mail quoted in a reply arrives with its targets in plain sight. It is then
- * escaped, because text that happens to contain angle brackets must stay text.
- */
 /**
  * The quoted body alone, without the "wrote:" line.
  *
@@ -434,8 +425,9 @@ export const MARKUP_NOTE =
   'arrive. Permitted are headings, paragraphs, line breaks, rules, quotes, emphasis, lists, ' +
   'tables, links and images, with colour, font, alignment, spacing and borders. Anything else ' +
   'is refused rather than quietly removed, and the answer names what and why. Note that the ' +
-  'confirmation shows every address in the message in full, including the ones behind links and ' +
-  'images, and every alt text, because those are what a recipient reads.'
+  'preview page linked from the confirmation lists every address in the message in full, ' +
+  'including the ones behind links and images, and every alt text, because those are what a ' +
+  'recipient reads. The question in the client stays short and carries counts instead.'
 
 /**
  * What a caller is told about the two levels.
@@ -508,6 +500,12 @@ export interface QuoteSummary {
  * message on average and up to thirty links. Listing those would bury the two
  * addresses that matter under thirty that arrived in the sender's mailbox
  * anyway, and a confirmation nobody reads to the end protects nobody.
+ *
+ * Worth knowing about the trade: because the quote keeps the original's markup,
+ * a link in it shows its text and hides its target, the same as in the message
+ * that arrived. An earlier version quoted as text, where every target was
+ * spelled out. What replaces that is the rendered preview page, where the quote
+ * is visible as the recipient will see it.
  */
 export function summariseQuote(draft: Draft): QuoteSummary | undefined {
   if (!draft.quotedHtml) return undefined
@@ -522,9 +520,10 @@ export function summariseQuote(draft: Draft): QuoteSummary | undefined {
 /**
  * Everything the message points at or carries, for the confirmation.
  *
- * Kept whole and never shortened. The body excerpt in a confirmation is cut
- * after a few lines, so an address on line thirty would otherwise never be
- * shown, which is precisely where one would be put to avoid being read.
+ * Kept whole and never shortened. The confirmation carries counts and the
+ * preview page carries the detail, so this is the list a person reads before
+ * answering. Shortening it would hide the entry on line thirty, which is
+ * precisely where one would be put to avoid being read.
  */
 export function describeAttachments(draft: Draft): string[] {
   const lines: string[] = []

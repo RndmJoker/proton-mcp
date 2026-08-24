@@ -23,8 +23,11 @@
  *    an HMAC, so the client cannot mint or alter one, and it is bound to the
  *    tool so a confirmation for one cannot be replayed at another.
  * 3. **The question shows what actually goes out.** Recipients separated into
- *    To, Cc and Bcc, the subject, and the first lines of the body, all derived
- *    from the same object the digest covers and the sender builds from.
+ *    To, Cc and Bcc, and the subject, derived from the same object the digest
+ *    covers and the sender builds from. It carries no part of the body: the
+ *    question grew with the message until the confirm button sat below the
+ *    bottom of the dialog, so the body moved to the preview page and the
+ *    question stays a fixed length.
  *
  * ## Why this is a returned value rather than a call
  *

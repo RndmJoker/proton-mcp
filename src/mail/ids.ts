@@ -56,7 +56,11 @@ export interface ResolvedMessage {
   path: string
   /** Valid only together with `path`, and only until the message is moved. */
   uid: number
-  /** Changes when the Bridge renumbers UIDs. Cached UIDs are void afterwards. */
+  /**
+   * Changes when the Bridge renumbers a mailbox, which invalidates every UID in
+   * it. Reported for diagnosis only: nothing here keeps a UID beyond the call
+   * that resolved it, so there is no cache for this to invalidate.
+   */
   uidValidity: string
 }
 

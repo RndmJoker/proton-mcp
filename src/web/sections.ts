@@ -35,7 +35,12 @@ interface Common {
   disclaimer: DisclaimerState
 }
 
-/** A wall-clock time, local to whoever is looking at the page. */
+/**
+ * A wall-clock time in the locale and timezone of the machine running the
+ * server, because the page is rendered there and carries no script to adjust
+ * it. Same thing for anyone at that machine, which is the ordinary case; read
+ * from a phone in another timezone it is the server's clock, not the reader's.
+ */
 function formatTime(at: number): string {
   return new Date(at).toLocaleTimeString()
 }
