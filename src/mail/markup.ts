@@ -205,9 +205,15 @@ export interface StyleNote {
 
 /** An address the message points at, which a person has to see before sending. */
 export interface MarkupUrl {
-  kind: 'link' | 'image'
+  /**
+   * `style` is an address inside a CSS value, such as `background: url(...)`.
+   * It is its own kind because a reader has no text for it and no way to see it
+   * coming: a link shows words, an image shows a frame or its alt text, and a
+   * CSS background shows nothing at all while still being fetched.
+   */
+  kind: 'link' | 'image' | 'style'
   url: string
-  /** The text a reader sees for a link, or the alt text of an image. */
+  /** The text a reader sees for a link, the alt text of an image, or the property and element for a CSS address. */
   label: string
 }
 
@@ -240,19 +246,87 @@ export interface MarkupReading {
  * `display: inline-block` is a button; `display: none` is a disappearance. One
  * property, two very different things to tell somebody.
  */
+/**
+ * Splits a style attribute into declarations without cutting inside `url(...)`.
+ *
+ * A plain `split(';')` looks right until a data URL turns up:
+ * `background: url(data:image/png;base64,AAAA)` becomes `background:
+ * url(data:image/png` and `base64,AAAA)`. The first half no longer parses as a
+ * url and the second reads as a property named `base64,aaaa)`, which at
+ * "standard" is refused for not being on the list and at "extended" is
+ * permitted, because there every property is. So the one scheme that is refused
+ * by name on both levels travelled through on one of them. Measured on
+ * 24.08.2026 while closing the CSS address hole; the two bugs hid each other.
+ */
+function splitDeclarations(style: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let current = ''
+  for (const ch of style) {
+    if (ch === '(') depth++
+    else if (ch === ')') depth = Math.max(0, depth - 1)
+    if (ch === ';' && depth === 0) {
+      out.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  out.push(current)
+  return out
+}
+
+/**
+ * Every address inside one CSS value.
+ *
+ * `url(...)` may quote its argument or not, so all three spellings are read.
+ * There can be more than one in a value: `background` takes a list, and a
+ * shorthand can carry an image beside its colour.
+ */
+function urlsInValue(value: string): string[] {
+  const found: string[] = []
+  const pattern = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)/gi
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(value)) !== null) {
+    const address = (match[1] ?? match[2] ?? match[3] ?? '').trim()
+    if (address) found.push(address)
+  }
+  return found
+}
+
 function readStyle(
   tag: string,
   style: string,
   level: MarkupLevel,
-): { problems: MarkupProblem[]; notes: StyleNote[] } {
+): { problems: MarkupProblem[]; notes: StyleNote[]; urls: MarkupUrl[] } {
   const problems: MarkupProblem[] = []
   const notes: StyleNote[] = []
+  const urls: MarkupUrl[] = []
 
-  for (const declaration of style.split(';')) {
+  for (const declaration of splitDeclarations(style)) {
     const [rawName, ...rest] = declaration.split(':')
     const name = (rawName ?? '').trim().toLowerCase()
     const value = rest.join(':').trim()
     if (!name) continue
+
+    // Before anything about the property itself. An address in a CSS value is
+    // fetched by the recipient's client exactly like the src of an image, and
+    // it is worse in one respect: nothing shows it. `background: url(...)` was
+    // permitted at "standard" and reported no address at all, so a tracking
+    // pixel travelled in a message whose confirmation listed no addresses.
+    //
+    // Checked on both levels and for every property, not for a list of the
+    // ones known to take a url. `extended` permits every property, so a list
+    // would be a hole by construction: `border-image`, `mask`, `cursor`,
+    // `list-style` and `content` all take one.
+    for (const address of urlsInValue(value)) {
+      const problem = urlProblem(tag, `style "${name}"`, address)
+      if (problem) {
+        problems.push(problem)
+        continue
+      }
+      urls.push({ kind: 'style', url: address, label: `${name} on <${tag}>` })
+    }
 
     const ordinary =
       PERMITTED_STYLES.has(name) && !(MUST_BE_POSITIVE.has(name) && /^0(\D|$)|^-/.test(value))
@@ -298,16 +372,25 @@ function readStyle(
         'plainly that it was done.',
     })
   }
-  return { problems, notes }
+  return { problems, notes, urls }
 }
 
+/**
+ * `where` names the place an address was found, ready to read: `href`, `src` or
+ * a CSS property. It is interpolated into the message, so it says
+ * `href="..." on <a>` for an attribute and `background: url(...) in <p>` for a
+ * style, rather than forcing one shape onto both.
+ */
 function urlProblem(tag: string, attribute: string, value: string): MarkupProblem | undefined {
   const trimmed = value.trim()
+  const where = attribute.startsWith('style ')
+    ? `${attribute}: url(${trimmed.slice(0, 40)}) in <${tag}>`
+    : `${attribute}="${trimmed.slice(0, 60)}" on <${tag}>`
   // A relative address has no meaning in a message: there is no page it is
   // relative to, so it would simply be broken wherever it arrived.
   if (!/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
     return {
-      found: `${attribute}="${trimmed}" on <${tag}>`,
+      found: where,
       reason:
         'An address in a message has to be complete. A relative one has nothing to be relative ' +
         'to once the message has been delivered. Write the whole address, including https://.',
@@ -316,7 +399,7 @@ function urlProblem(tag: string, attribute: string, value: string): MarkupProble
   const scheme = trimmed.slice(0, trimmed.indexOf(':') + 1).toLowerCase()
   if (!PERMITTED_SCHEMES.includes(scheme)) {
     return {
-      found: `${attribute}="${trimmed.slice(0, 40)}" on <${tag}>`,
+      found: where,
       reason:
         `"${scheme}" is not an address this server puts in a message. Permitted are ` +
         `${PERMITTED_SCHEMES.join(', ')}. A "data:" address in particular would carry a whole ` +
@@ -382,6 +465,7 @@ export function readMarkup(html: string, level: MarkupLevel = 'standard'): Marku
             const read = readStyle(tag, String(value), level)
             problems.push(...read.problems)
             styleNotes.push(...read.notes)
+            urls.push(...read.urls)
           }
           if (attribute === 'href' || attribute === 'src') {
             const problem = urlProblem(tag, attribute, String(value))
@@ -416,9 +500,36 @@ export function readMarkup(html: string, level: MarkupLevel = 'standard'): Marku
           openLink = undefined
         }
       },
-      oncomment() {
-        // Dropped by every reader and by the preview alike, so it hides nothing
-        // and is not worth refusing over.
+      oncomment(data) {
+        // Not dropped by every reader. Outlook executes conditional comments,
+        // so `<!--[if mso]><style>...</style><![endif]-->` is markup there and
+        // a comment everywhere else, including in this parser and in the
+        // preview. That is exactly the shape the permitted list is built to
+        // refuse: a `<style>` block reaches out of its own element and can
+        // restyle the whole message.
+        //
+        // Measured on real mail: three of 151 messages hid a `<style>` block
+        // this way and one hid a `<noscript>`. Fifteen unit tests were green
+        // while the hole was open, and quote.ts already drops comments from a
+        // quote for this reason. The composed part had no such guard.
+        //
+        // Refused rather than stripped, like everything else outside the list:
+        // a message quietly altered is no longer the message anyone agreed to.
+        // Checking for `[if mso]` would close these four spellings and leave
+        // the next one open, so the form of the hole goes rather than its known
+        // shapes.
+        //
+        // Both levels. `extended` widens which CSS properties may be used, not
+        // what may reach out of its own element.
+        const excerpt = data.trim().replace(/\s+/g, ' ').slice(0, 60)
+        problems.push({
+          found: `comment <!--${excerpt}${data.trim().length > 60 ? '...' : ''}-->`,
+          reason:
+            'A comment is not inert everywhere. Outlook runs conditional comments, so markup ' +
+            'inside one is delivered as markup to some recipients and as nothing to others, and ' +
+            'neither the confirmation nor the preview can show what the first group sees. Write ' +
+            'the message without comments; there is nothing a recipient gains from one.',
+        })
       },
     },
     { decodeEntities: true, lowerCaseTags: true, lowerCaseAttributeNames: true },
