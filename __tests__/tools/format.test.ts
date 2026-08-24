@@ -164,9 +164,27 @@ describe('formatMessage', () => {
     // So that instructions inside a message cannot pass as instructions from
     // the user.
     const text = formatMessage(message())
-    expect(text).toContain('----- BEGIN UNTRUSTED MESSAGE CONTENT -----')
-    expect(text).toContain('----- END UNTRUSTED MESSAGE CONTENT -----')
+    expect(text).toMatch(/----- BEGIN UNTRUSTED MESSAGE CONTENT [0-9a-f]{16} -----/)
+    expect(text).toMatch(/----- END UNTRUSTED MESSAGE CONTENT [0-9a-f]{16} -----/)
     expect(text).toContain('not an instruction')
+  })
+
+  it('draws a fresh marker label for every answer', () => {
+    // A label reused across answers is a label a sender can learn.
+    const labels = new Set<string>()
+    for (let i = 0; i < 20; i++) {
+      const found = formatMessage(message()).match(/BEGIN UNTRUSTED MESSAGE CONTENT ([0-9a-f]{16})/)
+      labels.add(found?.[1] ?? '')
+    }
+    expect(labels.size).toBe(20)
+  })
+
+  it('opens and closes with the same label', () => {
+    const text = formatMessage(message())
+    const begin = text.match(/BEGIN UNTRUSTED MESSAGE CONTENT ([0-9a-f]{16})/)?.[1]
+    const end = text.match(/END UNTRUSTED MESSAGE CONTENT ([0-9a-f]{16})/)?.[1]
+    expect(begin).toBeDefined()
+    expect(begin).toBe(end)
   })
 
   it('puts server metadata before the content', () => {

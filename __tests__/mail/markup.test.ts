@@ -45,8 +45,129 @@ describe('what the text preview leaves out', () => {
     }
   })
 
-  it('leaves comments alone, because nothing renders them either', () => {
-    expect(readMarkup('<p>x</p><!-- a note -->').problems).toEqual([])
+  it('refuses a comment, because one reader does render them', () => {
+    // This test used to assert the opposite, on the assumption that a comment
+    // is inert. Outlook runs conditional comments, so it is not, and the
+    // permitted list had a hole shaped exactly like the one quote.ts already
+    // closes for a quote: a <style> block that reaches out of its own element.
+    expect(
+      problems('<p>x</p><!--[if mso]><style>p{display:none}</style><![endif]-->').join(' '),
+    ).toContain('comment')
+  })
+
+  it('refuses an ordinary comment too, so the form of the hole goes', () => {
+    // Not a check for "[if mso]". That spelling would be closed and the next
+    // one left open, which is the same mistake in a new place.
+    expect(problems('<p>x</p><!-- just a note -->').join(' ')).toContain('comment')
+  })
+
+  it('refuses a comment at both levels', () => {
+    // "extended" widens which CSS properties may be used, not what may reach
+    // out of its own element.
+    for (const level of ['standard', 'extended'] as const) {
+      expect(readMarkup('<p>x</p><!--[if mso]><style>a{}</style><![endif]-->', level).problems)
+        .toHaveLength(1)
+    }
+  })
+
+  it('says what the comment contained, so a caller can find it', () => {
+    const [problem] = readMarkup('<p>x</p><!-- find me -->').problems
+    expect(problem?.found).toContain('find me')
+  })
+})
+
+describe('an address inside a CSS value is still an address', () => {
+  /**
+   * The hole these close: `background` is permitted at "standard", and
+   * readStyle only ever looked at the property name. So
+   * `background: url(https://tracker/pixel.png)` was sendable and reported no
+   * address at all, which means a tracking pixel travelled in a message whose
+   * confirmation listed nothing to look at. The alt text case above is the same
+   * idea: what matters is what reaches the recipient without reaching the
+   * person confirming.
+   */
+  it('reports an address in a background shorthand', () => {
+    const reading = readMarkup('<p style="background: url(https://tracker.invalid/p.png)">x</p>')
+    expect(reading.problems).toEqual([])
+    expect(reading.urls).toEqual([
+      { kind: 'style', url: 'https://tracker.invalid/p.png', label: 'background on <p>' },
+    ])
+  })
+
+  it('reads all three spellings of url()', () => {
+    // Written as they can actually appear in a style attribute: bare, in single
+    // quotes, and in double quotes as an entity, because a literal double quote
+    // would end the attribute itself.
+    for (const value of [
+      'url(https://a.invalid/p.png)',
+      "url('https://a.invalid/p.png')",
+      'url(&quot;https://a.invalid/p.png&quot;)',
+    ]) {
+      const reading = readMarkup(`<p style="background: ${value}">x</p>`)
+      expect(reading.urls.map((u) => u.url)).toEqual(['https://a.invalid/p.png'])
+    }
+  })
+
+  it('reports both addresses when a value carries two', () => {
+    const reading = readMarkup(
+      '<p style="background: url(https://a.invalid/1.png), url(https://b.invalid/2.png)">x</p>',
+    )
+    expect(reading.urls.map((u) => u.url)).toEqual([
+      'https://a.invalid/1.png',
+      'https://b.invalid/2.png',
+    ])
+  })
+
+  it('refuses a data: address in CSS on both levels', () => {
+    // Refused by name in both levels for the attribute case, and it has to be
+    // the same here. The semicolon inside a data URL is what made this
+    // interesting: it used to split the declaration in half.
+    for (const level of ['standard', 'extended'] as const) {
+      const reading = readMarkup(
+        '<p style="background: url(data:image/png;base64,AAAA)">x</p>',
+        level,
+      )
+      expect(reading.problems).toHaveLength(1)
+      expect(reading.urls).toEqual([])
+    }
+  })
+
+  it('refuses javascript: and a relative address in CSS', () => {
+    for (const value of ['url(javascript:alert(1))', 'url(/local.png)']) {
+      const reading = readMarkup(`<p style="background: ${value}">x</p>`)
+      expect(reading.problems).toHaveLength(1)
+    }
+  })
+
+  it('checks every property, not a list of the ones known to take a url', () => {
+    // At "extended" every property is permitted, so a list of url-carrying
+    // properties would be a hole by construction.
+    for (const property of ['background-image', 'border-image', 'mask', 'cursor', 'list-style']) {
+      const reading = readMarkup(
+        `<p style="${property}: url(https://a.invalid/p.png)">x</p>`,
+        'extended',
+      )
+      expect(reading.urls.map((u) => u.url)).toEqual(['https://a.invalid/p.png'])
+    }
+  })
+
+  it('does not split a declaration inside url()', () => {
+    // The semicolon in a data URL used to cut the declaration in two, leaving a
+    // second half that read as a property named "base64,aaaa)". At "standard"
+    // that was refused for not being on the list; at "extended", where every
+    // property is permitted, it went straight through.
+    const reading = readMarkup(
+      '<p style="color: red; background: url(data:image/png;base64,AAAA)">x</p>',
+      'extended',
+    )
+    expect(reading.problems).toHaveLength(1)
+    expect(reading.problems[0]?.found).toContain('data:')
+  })
+
+  it('leaves a value without an address alone', () => {
+    const reading = readMarkup('<p style="background: #ff0000">x</p>')
+    expect(reading.problems).toEqual([])
+    expect(reading.urls).toEqual([])
   })
 })
 

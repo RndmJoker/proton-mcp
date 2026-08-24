@@ -31,7 +31,7 @@ import { layout, escapeHtml, type DisclaimerState } from './layout.js'
 export interface PendingUrl {
   url: string
   label: string
-  kind: 'link' | 'image'
+  kind: 'link' | 'image' | 'style'
 }
 
 export interface PendingData {
@@ -98,7 +98,7 @@ function urlTable(urls: PendingUrl[]): string {
     .map(
       (u) => `<tr>
       <td><code>${escapeHtml(u.url)}</code></td>
-      <td>${u.kind === 'link' ? 'link' : 'image'}</td>
+      <td>${u.kind === 'style' ? 'CSS' : u.kind}</td>
       <td>${u.label ? escapeHtml(u.label) : '<span class="hint">no text</span>'}</td>
     </tr>`,
     )

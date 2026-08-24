@@ -94,14 +94,21 @@ why. A message that was silently altered is no longer the message anyone agreed
 to, so there is nothing to guess at: if a send is refused, the reason says which
 element or property and what to use instead.
 
-Two refusals are worth understanding rather than working around:
+Three refusals are worth understanding rather than working around:
 
 - **Properties that hide content** (\`display\`, \`visibility\`, \`opacity\`,
   \`position\`, a size of zero) are refused. They let a message be delivered
   looking different from how it was written.
-- **Addresses** are limited to \`http\`, \`https\`, \`mailto\` and \`cid\`. A \`data:\`
-  address would carry a whole file inside the markup, where nothing lists it as
-  an attachment.
+- **Addresses** are limited to \`http\`, \`https\`, \`mailto\` and \`cid\`, wherever
+  they appear. That includes inside a CSS value: \`background: url(…)\` is an
+  address like any other, it is listed on the preview page like any other, and a
+  \`data:\` one is refused there too. A \`data:\` address would carry a whole file
+  inside the markup, where nothing lists it as an attachment.
+- **Comments are refused**, both levels, ordinary ones included. A comment looks
+  inert and is not: Outlook runs conditional comments, so markup inside one
+  reaches some recipients as markup and everyone else as nothing, and neither
+  the confirmation nor the preview can show what the first group sees. Write the
+  message without them; a recipient gains nothing from a comment.
 
 ## What the person confirming is shown
 
