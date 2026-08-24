@@ -117,6 +117,42 @@ describe('htmlToText', () => {
   it('preserves umlauts', () => {
     expect(htmlToText('<p>Äpfel, Öfen, Über, Straße</p>')).toContain('Äpfel, Öfen, Über, Straße')
   })
+
+  // The four below cover options that arrive through the selector list rather
+  // than the top level. html-to-text merges them with a deep merge from a
+  // dependency, so a broken merge would silently fall back to its defaults and
+  // change what a model reads without anything failing. Each of these asserts
+  // the option took effect, not just that conversion happened.
+
+  it('leaves headings as written instead of shouting them', () => {
+    // Upper-casing is the library default, and it changes the wording.
+    for (const level of [1, 2, 3, 4, 5, 6]) {
+      const text = htmlToText(`<h${level}>A quiet heading</h${level}>`)
+      expect(text).toContain('A quiet heading')
+    }
+  })
+
+  it('does not print a link target twice when it is also the text', () => {
+    const text = htmlToText('<a href="https://one.example/">https://one.example/</a>')
+    expect(text.match(/one\.example/g)).toHaveLength(1)
+  })
+
+  it('does not wrap, so a long line survives as one line', () => {
+    // Wrapping at 80 columns is the library default. A hard break inside a
+    // sentence costs a model the sentence.
+    const text = htmlToText(`<p>${'word '.repeat(60).trim()}</p>`)
+    expect(text).not.toContain('\n')
+  })
+
+  it('reads a table cell by cell rather than running the rows together', () => {
+    const text = htmlToText(
+      '<table><tr><td>top left</td><td>top right</td></tr>' +
+        '<tr><td>bottom left</td><td>bottom right</td></tr></table>',
+    )
+    for (const cell of ['top left', 'top right', 'bottom left', 'bottom right']) {
+      expect(text).toContain(cell)
+    }
+  })
 })
 
 describe('truncate', () => {
