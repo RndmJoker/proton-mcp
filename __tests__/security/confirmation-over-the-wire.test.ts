@@ -42,6 +42,19 @@ vi.mock('../../src/mail/send.js', () => ({
   }),
 }))
 
+/**
+ * A JSON-RPC frame as this test reads and writes them.
+ *
+ * Deliberately not the SDK's `JSONRPCMessage`, which is a union of the four
+ * precise shapes. This test speaks raw protocol and inspects whatever comes
+ * back, so one shape with optional fields is what makes it readable: a received
+ * frame is checked for `method`, `id`, `result` and `error` without first
+ * narrowing which of the four it is.
+ *
+ * The price is a conversion at the two points where a frame meets the
+ * transport, marked below. Those are the only places, and keeping them explicit
+ * is the point of having this type at all.
+ */
 interface Message {
   jsonrpc: '2.0'
   id?: number | string
@@ -103,7 +116,10 @@ function connect(options: {
     { transport: serverSide },
   )
 
-  clientSide.onmessage = (message: Message) => {
+  // Transport boundary one: the SDK hands over a JSONRPCMessage union, and this
+  // test reads it as the one flat shape above.
+  clientSide.onmessage = (raw) => {
+    const message = raw as Message
     received.push(message)
     // The server asking us something. This is the whole point of the exercise:
     // on this protocol revision the SDK turns the handler's returned
@@ -117,7 +133,10 @@ function connect(options: {
     }
   }
 
-  const send = (message: Message): Promise<void> => clientSide.send(message)
+  // Transport boundary two: the frames built here are raw on purpose, including
+  // incomplete ones, because what the server does with those is the subject.
+  const send = (message: Message): Promise<void> =>
+    clientSide.send(message as Parameters<typeof clientSide.send>[0])
   const replyTo = (id: number): Message | undefined =>
     received.find((m) => m.id === id && (m.result !== undefined || m.error !== undefined))
 

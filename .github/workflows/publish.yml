@@ -53,12 +53,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # The same three gates the CI applies to a pull request. A release is
-      # built from a commit that already passed them, but this job publishes
-      # from a tag rather than from that run, and re-checking costs a minute
-      # against shipping something nobody looked at.
+      # The same gates the CI applies to a pull request. A release is built from
+      # a commit that already passed them, but this job publishes from a tag
+      # rather than from that run, and re-checking costs a minute against
+      # shipping something nobody looked at.
+      #
+      # Kept in step with ci.yml on purpose. When the two drift, this is the one
+      # that drifts unnoticed, because it runs once per release.
       - name: Type check
         run: npx tsc --noEmit
+
+      - name: Type check the tests
+        run: npx tsc -p tsconfig.test.json
 
       - name: Tests
         run: npm run test

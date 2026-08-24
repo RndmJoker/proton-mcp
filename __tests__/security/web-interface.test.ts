@@ -44,7 +44,16 @@ beforeEach(async () => {
       signOuts++
       connected = false
     },
-    getStatus: async () => ({ connected, bridgeHost: '127.0.0.1', bridgeImapPort: 1143 }),
+    // bridgeSmtpPort is required on StatusSnapshot rather than optional, and the
+    // comment there says why: it used to fall back to 0, and the advanced block
+    // then prefilled a value the same form refused. A stand-in that leaves it
+    // out stops resembling the thing it stands in for.
+    getStatus: async () => ({
+      connected,
+      bridgeHost: '127.0.0.1',
+      bridgeImapPort: 1143,
+      bridgeSmtpPort: 1025,
+    }),
     // Rejections are logged; in tests that would only be noise.
     notify: () => undefined,
   })

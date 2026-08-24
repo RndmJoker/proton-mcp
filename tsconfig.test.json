@@ -1,0 +1,34 @@
+// Type checking for the test files, which the main configuration does not look
+// at.
+//
+// tsconfig.json excludes __tests__ so that a build writes only src/ into dist/.
+// The side effect was that neither `npm run typecheck` nor CI ever type checked
+// a test file: a required field added to a shared type made every stand-in in
+// the tests invalid while tsc kept reporting success, and it surfaced at runtime
+// when vitest tripped over undefined. That is the lucky version. A wrong cast on
+// a path no test walks would not surface at all.
+//
+// Three things have to be overridden rather than inherited, and the first is the
+// one that looks fine and checks nothing:
+//
+//   - `exclude`, or the inherited list keeps __tests__ out and this file
+//     type checks zero files while reporting success. Measured while writing it.
+//   - `rootDir`, which is "src" upstream. Left in place it produces one TS6059
+//     per test file ("not under rootDir"), even with noEmit, burying the real
+//     errors in noise.
+//   - `noEmit`, because this configuration exists to check, not to build. It
+//     also makes the inherited outDir and declaration harmless.
+//
+// Everything else is inherited on purpose. Test files are held to the same
+// strictness as src/, including exactOptionalPropertyTypes and
+// noUncheckedIndexedAccess, because a stand-in built loosely is a stand-in that
+// stops resembling the thing it stands in for.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["__tests__/**/*", "src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
