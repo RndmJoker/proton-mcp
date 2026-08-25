@@ -45,6 +45,7 @@ import { BridgeError } from '../bridge/errors.js'
 import { normaliseMessageId, findByMessageId } from './ids.js'
 import { getMessage, listMessages, type ListResult } from './messages.js'
 import { htmlToText } from '../mime/parse.js'
+import type { MarkupLevel } from './markup.js'
 import {
   buildMessage,
   mintMessageId,
@@ -99,6 +100,16 @@ export interface DraftInput {
   subject?: string | undefined
   text?: string | undefined
   html?: string | undefined
+  /**
+   * How much markup the body may carry. Absent means `standard`.
+   *
+   * This field was missing while every draft tool already declared it in its
+   * input schema, so a caller asking for `extended` was validated against
+   * `standard` and refused with a message naming the level it had just asked
+   * for. Because a variable rather than an object literal is passed in, excess
+   * property checking never flagged it.
+   */
+  markupLevel?: MarkupLevel | undefined
 }
 
 export interface DraftResult {
@@ -200,6 +211,7 @@ export async function createDraft(
     text: input.html !== undefined ? htmlToText(input.html) : (input.text ?? ''),
     messageId: mintMessageId(from.address),
     ...(input.html !== undefined ? { html: input.html } : {}),
+    ...(input.markupLevel !== undefined ? { markupLevel: input.markupLevel } : {}),
   }
 
   const raw = await buildMessage(draft, { keepBcc: true })
@@ -296,14 +308,25 @@ export async function updateDraft(
  * what was there, markup included, which is what makes changing only the
  * subject of a formatted draft leave the formatting alone.
  */
+/**
+ * The body of an updated draft, and the level it is held to.
+ *
+ * The level travels with the body rather than beside it: a caller replacing the
+ * markup states which level the new markup is meant for, and one that only
+ * changes the subject keeps the stored body without a level, which means
+ * `standard`. A level carried over onto markup nobody re-stated would be a
+ * permission granted by an earlier call.
+ */
 function markupOf(
   changes: DraftInput,
   current: { text: string; html?: string },
-): { text: string; html?: string } {
-  if (changes.html !== undefined) return { text: htmlToText(changes.html), html: changes.html }
+): { text: string; html?: string; markupLevel?: MarkupLevel } {
+  const level = changes.markupLevel !== undefined ? { markupLevel: changes.markupLevel } : {}
+  if (changes.html !== undefined)
+    return { text: htmlToText(changes.html), html: changes.html, ...level }
   if (changes.text !== undefined) return { text: changes.text }
   return current.html !== undefined
-    ? { text: current.text, html: current.html }
+    ? { text: current.text, html: current.html, ...level }
     : { text: current.text }
 }
 
@@ -382,7 +405,7 @@ export async function buildReplyDraft(
   fromAddress: string,
   messageId: string,
   text: string,
-  options: { all?: boolean; mailbox?: string; html?: string } = {},
+  options: { all?: boolean; mailbox?: string; html?: string; markupLevel?: MarkupLevel } = {},
 ): Promise<Draft> {
   const original = await getMessage(connection, messageId, {
     ...(options.mailbox ? { hint: options.mailbox } : {}),
@@ -418,6 +441,7 @@ export async function buildReplyDraft(
     subject: prefixSubject(original.subject, 'Re'),
     ...body,
     messageId: mintMessageId(from.address),
+    ...(options.markupLevel !== undefined ? { markupLevel: options.markupLevel } : {}),
     ...(thread.messageId ? { inReplyTo: thread.messageId } : {}),
     references: [...thread.references, ...(thread.messageId ? [thread.messageId] : [])],
   }
@@ -432,7 +456,7 @@ export async function replyDraft(
   fromAddress: string,
   messageId: string,
   text: string,
-  options: { all?: boolean; mailbox?: string; html?: string } = {},
+  options: { all?: boolean; mailbox?: string; html?: string; markupLevel?: MarkupLevel } = {},
 ): Promise<DraftResult> {
   assertWritable(readOnly, 'creating a reply draft')
   const draft = await buildReplyDraft(connection, fromAddress, messageId, text, options)
@@ -466,7 +490,7 @@ export async function buildForwardDraft(
   messageId: string,
   to: string[],
   text: string,
-  options: { mailbox?: string; html?: string } = {},
+  options: { mailbox?: string; html?: string; markupLevel?: MarkupLevel } = {},
 ): Promise<Draft> {
   const original = await getMessage(connection, messageId, {
     ...(options.mailbox ? { hint: options.mailbox } : {}),
@@ -512,6 +536,7 @@ export async function buildForwardDraft(
           }
         })()),
     messageId: mintMessageId(from.address),
+    ...(options.markupLevel !== undefined ? { markupLevel: options.markupLevel } : {}),
   }
 
   // Only when there is something a quoted body would lose.
@@ -540,7 +565,7 @@ export async function forwardDraft(
   messageId: string,
   to: string[],
   text: string,
-  options: { mailbox?: string; html?: string } = {},
+  options: { mailbox?: string; html?: string; markupLevel?: MarkupLevel } = {},
 ): Promise<DraftResult> {
   assertWritable(readOnly, 'creating a forward draft')
   const draft = await buildForwardDraft(connection, fromAddress, messageId, to, text, options)

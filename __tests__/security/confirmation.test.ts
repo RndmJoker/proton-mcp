@@ -76,6 +76,18 @@ describe('digestOf', () => {
     ).not.toBe(digestOf(draft()))
   })
 
+  it('changes when the markup level changes', () => {
+    // The level does not change the bytes that go out - those are covered by
+    // `html` - but it changes what the question says: at "extended" the
+    // confirmation warns and the preview lists every property used. Without
+    // this, a yes given to the warned version could be replayed for the
+    // unwarned one. The doc comment on Draft.markupLevel claimed this was
+    // already covered while it was not.
+    expect(digestOf(draft({ html: '<p>x</p>', markupLevel: 'extended' }))).not.toBe(
+      digestOf(draft({ html: '<p>x</p>' })),
+    )
+  })
+
   it('does not change for things a recipient would never see', () => {
     // Two calls that describe the same message must not be told apart, or the
     // second round would refuse a confirmation that was perfectly good.

@@ -301,6 +301,72 @@ describe('forwardDraft', () => {
   })
 })
 
+describe('markupLevel reaches the message', () => {
+  /**
+   * Every draft tool declared markupLevel in its input schema and none of them
+   * passed it on: DraftInput did not have the field, and reply and forward never
+   * destructured it. A caller asking for "extended" was validated against
+   * "standard" and refused with a message naming the level it had just asked
+   * for, which is a loop with no way out from the caller's side.
+   *
+   * Tested through what a message may contain rather than by reading the field
+   * back. `display: inline-block` is refused at "standard" and permitted at
+   * "extended", and it is the property that makes a link fill its own padding -
+   * so without it there is no usable button, which is the case the note shipped
+   * with these tools names explicitly.
+   */
+  const BUTTON = '<p><a href="https://example.com" style="display: inline-block; padding: 12px">Go</a></p>'
+
+  it('lets a draft use extended markup when asked', async () => {
+    const { connection, recorded } = fakeConnection()
+    await createDraft(connection, false, ME, {
+      to: ['you@example.com'],
+      subject: 'A button',
+      html: BUTTON,
+      markupLevel: 'extended',
+    })
+    expect(recorded.appends).toHaveLength(1)
+    expect(recorded.appends[0]?.raw).toContain('inline-block')
+  })
+
+  it('still refuses the same markup at standard', async () => {
+    const { connection } = fakeConnection()
+    await expect(
+      createDraft(connection, false, ME, {
+        to: ['you@example.com'],
+        subject: 'A button',
+        html: BUTTON,
+      }),
+    ).rejects.toThrow(BridgeError)
+  })
+
+  it('carries the level into a reply', async () => {
+    const { connection, recorded } = fakeConnection()
+    await replyDraft(connection, false, ME, '<original@example.com>', '', {
+      html: BUTTON,
+      markupLevel: 'extended',
+    })
+    expect(recorded.appends[0]?.raw).toContain('inline-block')
+  })
+
+  it('carries the level into a forward', async () => {
+    const { connection, recorded } = fakeConnection()
+    await forwardDraft(connection, false, ME, '<original@example.com>', ['you@example.com'], '', {
+      html: BUTTON,
+      markupLevel: 'extended',
+    })
+    expect(recorded.appends[0]?.raw).toContain('inline-block')
+  })
+
+  it('keeps the level out of an update that only changes the subject', async () => {
+    // The level belongs to the body. An update that does not restate the markup
+    // must not inherit a permission granted by an earlier call.
+    const { connection, recorded } = fakeConnection()
+    await updateDraft(connection, false, ME, '<original@example.com>', { subject: 'Renamed' })
+    expect(recorded.appends[0]?.raw).toContain('Renamed')
+  })
+})
+
 describe('the mailbox guard cannot be reached around', () => {
   it('refuses when a mailbox reports a path other than the one that was opened', async () => {
     // Contrived on purpose, and it earned its place: without it, removing the

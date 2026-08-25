@@ -245,7 +245,7 @@ export function registerDraftTools(
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ messageId, text, replyAll, mailbox, html }, ctx) =>
+    async ({ messageId, text, replyAll, mailbox, html, markupLevel }, ctx) =>
       track(
         () =>
           withSignIn(ctx, async () => {
@@ -256,7 +256,12 @@ export function registerDraftTools(
                 requireFrom(from),
                 messageId,
                 text,
-                { all: replyAll, ...(mailbox ? { mailbox } : {}), ...(html !== undefined ? { html } : {}) },
+                {
+                  all: replyAll,
+                  ...(mailbox ? { mailbox } : {}),
+                  ...(html !== undefined ? { html } : {}),
+                  ...(markupLevel !== undefined ? { markupLevel } : {}),
+                },
               )
               return ok(describeDraft(draft, 'Reply written'))
             } catch (error) {
@@ -305,7 +310,7 @@ export function registerDraftTools(
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    async ({ messageId, to, text, mailbox, html }, ctx) =>
+    async ({ messageId, to, text, mailbox, html, markupLevel }, ctx) =>
       track(
         () =>
           withSignIn(ctx, async () => {
@@ -317,7 +322,11 @@ export function registerDraftTools(
                 messageId,
                 to,
                 text,
-                { ...(mailbox ? { mailbox } : {}), ...(html !== undefined ? { html } : {}) },
+                {
+                  ...(mailbox ? { mailbox } : {}),
+                  ...(html !== undefined ? { html } : {}),
+                  ...(markupLevel !== undefined ? { markupLevel } : {}),
+                },
               )
               return ok(describeDraft(draft, 'Forward written'))
             } catch (error) {
