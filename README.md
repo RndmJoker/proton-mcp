@@ -17,8 +17,8 @@ This server therefore runs on your machine as well, started by the AI client as 
 | Tool | What it does |
 | :--- | :--- |
 | `list_folders` | Lists folders and labels, grouped by kind |
-| `list_messages` | Headers of a mailbox, newest first, with paging |
-| `search_messages` | Full text, subject, sender, recipient, date range, read state, star, size |
+| `list_messages` | Headers of a mailbox, newest first, with paging. In "All Mail" the discarded ones are marked as such |
+| `search_messages` | Full text, subject, sender, recipient, date range, read state, star, size. Dates are the sender's, matching what the results show |
 | `get_message` | One message as readable text, HTML converted, budgeted |
 | `get_attachment` | One attachment by index, textual types only |
 | `add_label` | Applies an existing label. The message stays in its folder |

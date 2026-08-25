@@ -22,6 +22,7 @@ import {
   fetchHeaders,
   orderNewestFirst,
   MAX_LIST_LIMIT,
+  withTrashMarks,
   type MessageHeader,
   type OrderingCost,
 } from './messages.js'
@@ -179,7 +180,7 @@ export async function searchMessages(
   // Same helper the listing uses, so both produce identical entries.
   const headers = await connection.withMailbox(path, (client) => fetchHeaders(client, page))
 
-  return {
+  return withTrashMarks(connection, {
     path,
     total: ordered.length,
     offset,
@@ -187,5 +188,5 @@ export async function searchMessages(
     elapsedMs,
     ordering,
     fullText: isFullText(criteria),
-  }
+  })
 }
