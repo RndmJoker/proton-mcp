@@ -296,7 +296,7 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ messageId, text, replyAll, mailbox, html }, ctx) =>
+    async ({ messageId, text, replyAll, mailbox, html, markupLevel }, ctx) =>
       track(
         () =>
           withSignIn(ctx, async () => {
@@ -306,6 +306,7 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
                   all: replyAll,
                   ...(mailbox ? { mailbox } : {}),
                   ...(html !== undefined ? { html } : {}),
+                  ...(markupLevel !== undefined ? { markupLevel } : {}),
                 }),
               )
             } catch (error) {
@@ -352,7 +353,7 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ messageId, to, text, mailbox, html }, ctx) =>
+    async ({ messageId, to, text, mailbox, html, markupLevel }, ctx) =>
       track(
         () =>
           withSignIn(ctx, async () => {
@@ -364,7 +365,11 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
                   messageId,
                   to,
                   text,
-                  { ...(mailbox ? { mailbox } : {}), ...(html !== undefined ? { html } : {}) },
+                  {
+                    ...(mailbox ? { mailbox } : {}),
+                    ...(html !== undefined ? { html } : {}),
+                    ...(markupLevel !== undefined ? { markupLevel } : {}),
+                  },
                 ),
               )
             } catch (error) {

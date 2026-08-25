@@ -50,12 +50,11 @@ export interface Draft {
    * Part of the draft rather than a parameter beside it, because it decides
    * what the message is allowed to contain.
    *
-   * Note what the digest does and does not bind: it covers `html` as source
-   * text, so the markup itself cannot be swapped after the answer, but it does
-   * not carry the level. That holds today only because a wider level merely
-   * permits more of the same string. Anything that makes the level change what
-   * goes out, rather than what is allowed in, has to be added to `digestOf`
-   * first.
+   * Covered by the digest, alongside the markup itself. The level does not
+   * change the bytes that go out, but it changes what the question says: at
+   * `extended` the confirmation warns and the preview lists every property
+   * used. Binding it means a yes given to the warned version cannot be
+   * replayed for the unwarned one.
    */
   markupLevel?: MarkupLevel
   /** A whole message carried along, used when forwarding. */

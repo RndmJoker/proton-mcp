@@ -96,6 +96,14 @@ export function digestOf(draft: Draft): string {
     html: draft.html ?? null,
     // The quote is part of what goes out, so it is part of what was agreed to.
     quoted: draft.quotedHtml ?? null,
+    // The level the markup was held to. It does not change the bytes that go
+    // out, which are covered by `html` above, but it does change what the
+    // question says: at `extended` the confirmation carries a warning and the
+    // preview lists every property used. Covering it here means a yes given to
+    // the warned version cannot be replayed for the unwarned one, or the other
+    // way round. The doc comment on Draft.markupLevel claimed this was already
+    // the case; now it is.
+    markupLevel: draft.markupLevel ?? null,
     inReplyTo: draft.inReplyTo ?? null,
     attached: draft.attachedMessage?.filename ?? null,
     // The contents of every carried file, not just its name. A confirmation
