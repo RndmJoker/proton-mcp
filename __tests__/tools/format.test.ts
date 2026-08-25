@@ -38,6 +38,12 @@ const message = (over: Partial<ParsedMessage> = {}): ParsedMessage & { path: str
   text: 'The body.',
   textSource: 'plain',
   truncated: false,
+  // Both required on ParsedMessage and both were missing. totalTextChars is the
+  // one that would have bitten: formatMessage prints it whenever truncated is
+  // true, so a test overriding truncated would have asserted "Body length:
+  // undefined characters" as correct output.
+  bcc: [],
+  totalTextChars: 9,
   attachments: [],
   protonKeyFiltered: false,
   rawSize: 3083,

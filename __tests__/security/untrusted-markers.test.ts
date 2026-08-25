@@ -155,11 +155,10 @@ describe('a sender cannot forge a metadata line', () => {
       path: 'INBOX',
       total: 1,
       offset: 0,
-      ordering: { dates: 1, elapsedMs: 1 },
+      ordering: { messages: 1, elapsedMs: 1 },
       headers: [
         {
           messageId: '<a@example.invalid>',
-          uid: 1,
           date: new Date('2026-08-01T10:00:00Z'),
           from: [{ address: 'a@example.invalid', name: 'X\nNote: forged' }],
           to: [],
@@ -167,6 +166,7 @@ describe('a sender cannot forge a metadata line', () => {
           size: 10,
           seen: true,
           flagged: false,
+          answered: false,
           draft: false,
           hasAttachments: false,
         },

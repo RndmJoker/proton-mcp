@@ -28,8 +28,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Two configurations, and the second is the point of the first being
+      # incomplete for a year: tsconfig.json excludes __tests__ so a build
+      # writes only src/ into dist/, which also meant no test file was ever
+      # type checked. tsconfig.test.json covers them.
       - name: Type check
         run: npx tsc --noEmit
+
+      - name: Type check the tests
+        run: npx tsc -p tsconfig.test.json
 
       - name: Tests
         run: npm run test:coverage
