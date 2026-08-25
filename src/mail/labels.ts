@@ -24,7 +24,7 @@
 
 import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
-import { normaliseMessageId, resolveMessageId } from './ids.js'
+import { normaliseMessageId, findByMessageId, resolveMessageId } from './ids.js'
 
 /** The prefix Proton exposes labels under. Anything else is not a label. */
 export const LABEL_PREFIX = 'Labels/'
@@ -168,14 +168,19 @@ export async function removeLabel(
     // is pointless anyway.
     if (status.messages === 0) return false
 
-    const hits = await client.search({ header: { 'message-id': id } }, { uid: true })
-    if (!Array.isArray(hits) || hits.length === 0) return false
+    // findByMessageId rather than a search written out here: it makes the
+    // second attempt without the angle brackets and verifies every hit of it.
+    // Real mail carries unbracketed identifiers, and without the fallback this
+    // reported wasApplied: false for a label that was applied - which reads as
+    // "it was not set" rather than "it was not found".
+    const uid = await findByMessageId(client, id)
+    if (uid === undefined) return false
 
     // Guarded again, immediately before the expunge. The path cannot have
     // changed between the check above and here, but this is the line that
     // deletes, and it should not depend on a check twenty lines away.
     assertLabelMailbox(status.path)
-    await client.messageDelete(String(Math.max(...hits)), { uid: true })
+    await client.messageDelete(String(uid), { uid: true })
     return true
   })
 

@@ -36,7 +36,9 @@ export function registerMessageTools(server: McpServer, connection: Connection):
           .string()
           .default('INBOX')
           .describe(
-            'The mailbox path, for example "INBOX", "Archive" or "Folders/Work". Use list_folders to see them.',
+            'The mailbox path, for example "INBOX", "Archive" or "Folders/Work". Use list_folders ' +
+              'to see them. "All Mail" holds every message including discarded ones, and there the ' +
+              'entries that are in the trash come back marked "in trash".',
           ),
         limit: z
           .number()
@@ -78,12 +80,17 @@ export function registerMessageTools(server: McpServer, connection: Connection):
         'At least one criterion is required. Returns headers only, newest first across pages, with paging. ' +
         'A full-text search walks the local database of the Bridge and takes a few seconds on a large ' +
         'mailbox, while criteria such as unread or date are fast. Searching "All Mail" covers every ' +
-        'mailbox including trash.',
+        'mailbox including trash, and entries that are in the trash are marked "in trash" - the ' +
+        'other marks are flags rather than places, so "draft" says a message is one, not that it ' +
+        'is in Drafts.',
       inputSchema: z.object({
         mailbox: z
           .string()
           .default(ALL_MAIL)
-          .describe(`Which mailbox to search. Defaults to "${ALL_MAIL}", which holds every message.`),
+          .describe(
+            `Which mailbox to search. Defaults to "${ALL_MAIL}", which holds every message, ` +
+              'discarded ones included. Those come back marked "in trash".',
+          ),
         text: z
           .string()
           .optional()

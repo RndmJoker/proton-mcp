@@ -463,12 +463,18 @@ export async function replyDraft(
   return store(connection, draft)
 }
 
-/** The uid of a message inside one mailbox. */
+/**
+ * The uid of a message inside one mailbox.
+ *
+ * findByMessageId rather than a search written out here, because it makes the
+ * second attempt without the angle brackets and verifies every hit of it. Real
+ * mail carries unbracketed identifiers, and without the fallback this threw
+ * "the message is no longer in Drafts" for a message that had not moved.
+ */
 async function uidOf(connection: Connection, path: string, messageId: string): Promise<number> {
   const uid = await connection.withMailbox(path, async (client, status) => {
     if (status.messages === 0) return undefined
-    const hits = await client.search({ header: { 'message-id': messageId } }, { uid: true })
-    return Array.isArray(hits) && hits.length ? Math.max(...hits) : undefined
+    return findByMessageId(client, messageId)
   })
   if (uid === undefined) {
     throw new BridgeError(`The message ${messageId} is no longer in "${path}".`)

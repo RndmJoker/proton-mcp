@@ -10,7 +10,7 @@
 import type { ImapFlow } from 'imapflow'
 import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
-import { resolveMessageId, presentMessageId } from './ids.js'
+import { resolveMessageId, presentMessageId, ALL_MAIL, TRASH } from './ids.js'
 import { parseMessage, type ParsedMessage, type Address } from '../mime/parse.js'
 
 /** Upper bound for one listing. Deliberately low, callers can page. */
@@ -32,6 +32,20 @@ export interface MessageHeader {
   draft: boolean
   /** Whether the message carries attachments other than Proton's own key. */
   hasAttachments: boolean
+  /**
+   * Set only when listing "All Mail", and only for the messages that are in the
+   * trash.
+   *
+   * "All Mail" holds every message including the discarded ones, so a listing of
+   * it looked the same whether a message was filed or thrown away. An assistant
+   * reported three drafts waiting in Drafts; they were in the trash and Drafts
+   * was empty. The `draft` mark is a flag rather than a place, and it stays on a
+   * draft wherever it goes - which makes "draft" read as "in Drafts".
+   *
+   * Absent elsewhere on purpose: every other listing names its mailbox in the
+   * first line, so there is nothing to disambiguate.
+   */
+  inTrash?: boolean
 }
 
 /**
@@ -177,6 +191,44 @@ export function orderNewestFirst(entries: OrderEntry[]): number[] {
  * page: fetching headers for a whole result set would defeat the purpose, since
  * a common word matched 6803 messages in the measured mailbox.
  */
+/**
+ * Which of these identifiers are in the trash.
+ *
+ * One search per page rather than one per message. The alternative was to
+ * resolve the real folder of every entry, which is what findHomeFolder costs and
+ * would mean 25 lookups for a listing that is supposed to be the cheap call.
+ *
+ * A single OR over the page's identifiers, then the envelopes of whatever it
+ * found - so an empty trash or a page with nothing discarded pays for one search
+ * and no fetch.
+ *
+ * Failure is not an error. The mark is an addition to a listing, so a trash that
+ * cannot be opened costs the mark and not the answer.
+ */
+async function trashedAmong(connection: Connection, ids: string[]): Promise<Set<string>> {
+  const wanted = ids.filter((id) => id !== '')
+  if (wanted.length === 0) return new Set()
+
+  return connection
+    .withMailbox(TRASH, async (client, status): Promise<Set<string>> => {
+      // The Bridge answers a fetch on an empty mailbox with BAD.
+      if (status.messages === 0) return new Set()
+      const hits = await client.search(
+        { or: wanted.map((id) => ({ header: { 'message-id': id } })) },
+        { uid: true },
+      )
+      if (!Array.isArray(hits) || hits.length === 0) return new Set()
+
+      const found = new Set<string>()
+      for await (const msg of client.fetch(hits, { uid: true, envelope: true }, { uid: true })) {
+        const id = presentMessageId(msg.envelope?.messageId ?? '')
+        if (id) found.add(id)
+      }
+      return found
+    })
+    .catch(() => new Set<string>())
+}
+
 export async function fetchHeaders(client: ImapFlow, uids: number[]): Promise<MessageHeader[]> {
   if (uids.length === 0) return []
 
@@ -246,7 +298,7 @@ export async function listMessages(
   const offset = Math.max(options.offset ?? 0, 0)
   const nothing: OrderingCost = { messages: 0, elapsedMs: 0 }
 
-  return connection.withMailbox(path, async (client, status) => {
+  const result = await connection.withMailbox(path, async (client, status) => {
     // The Bridge answers FETCH on an empty mailbox with `BAD no such message`
     // instead of an empty result, so nothing may be fetched here.
     if (status.messages === 0) {
@@ -276,6 +328,33 @@ export async function listMessages(
     const headers = await fetchHeaders(client, page)
     return { path, total: ordered.length, offset, headers, ordering }
   })
+
+  return withTrashMarks(connection, result)
+}
+
+/**
+ * Marks the entries of an "All Mail" page that are in the trash.
+ *
+ * Outside the withMailbox above rather than inside it, and not by choice: a
+ * mailbox is held under a lock for the duration of the operation, so a second
+ * withMailbox nested in the first would wait for a lock its own frame holds.
+ */
+export async function withTrashMarks<T extends { path: string; headers: MessageHeader[] }>(
+  connection: Connection,
+  result: T,
+): Promise<T> {
+  if (result.path !== ALL_MAIL || result.headers.length === 0) return result
+
+  const trashed = await trashedAmong(
+    connection,
+    result.headers.map((h) => h.messageId),
+  )
+  if (trashed.size === 0) return result
+
+  return {
+    ...result,
+    headers: result.headers.map((h) => (trashed.has(h.messageId) ? { ...h, inTrash: true } : h)),
+  }
 }
 
 export interface FullMessage extends ParsedMessage {

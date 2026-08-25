@@ -103,8 +103,22 @@ export function formatSize(bytes: number): string {
 }
 
 /** Flags in a compact form. Only what deviates from the ordinary is shown. */
+/**
+ * The marks after an entry.
+ *
+ * `in trash` comes first, because it is the only one that says where a message
+ * is rather than what state it is in - and the only one that changes what a
+ * reader should do about it. It is set when listing "All Mail", which holds
+ * discarded messages alongside filed ones.
+ *
+ * The others are flags, `draft` included. A draft keeps that flag wherever it
+ * goes, so "draft" says the message is one, not that it is in Drafts. Read
+ * together with "in trash" that reads correctly; without it, an assistant
+ * reported three drafts waiting in Drafts while they were in the trash.
+ */
 function formatFlags(h: MessageHeader): string {
   const marks: string[] = []
+  if (h.inTrash) marks.push('in trash')
   if (!h.seen) marks.push('unread')
   if (h.flagged) marks.push('starred')
   if (h.answered) marks.push('answered')

@@ -18,6 +18,17 @@ import { BridgeError } from '../bridge/errors.js'
 export const ALL_MAIL = 'All Mail'
 
 /**
+ * The trash, which is what deleting means here.
+ *
+ * Lives beside ALL_MAIL rather than in actions.ts, where it used to, because
+ * both the reading and the writing side need it now: a listing of "All Mail"
+ * says which of its entries are in the trash, and reaching from messages.ts
+ * into actions.ts would be a new edge from reading into writing for the sake of
+ * one string.
+ */
+export const TRASH = 'Trash'
+
+/**
  * Brings a Message-ID into the shape the IMAP header uses.
  *
  * Callers paste identifiers from earlier answers, sometimes without the angle

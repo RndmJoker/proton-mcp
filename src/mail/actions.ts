@@ -32,7 +32,7 @@
 
 import type { Connection, Mailbox } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
-import { normaliseMessageId, ALL_MAIL } from './ids.js'
+import { normaliseMessageId, findByMessageId, ALL_MAIL, TRASH } from './ids.js'
 import { LABEL_PREFIX } from './labels.js'
 
 /**
@@ -127,9 +127,13 @@ export async function findHomeFolder(
       .withMailbox(path, async (client, status) => {
         // The Bridge answers a fetch on an empty mailbox with BAD.
         if (status.messages === 0) return undefined
-        const hits = await client.search({ header: { 'message-id': messageId } }, { uid: true })
-        if (!Array.isArray(hits) || hits.length === 0) return undefined
-        return Math.max(...hits)
+        // findByMessageId rather than a search written out here. It makes the
+        // second attempt without the angle brackets and verifies every hit of
+        // it, which real mail needs: an identifier is not always bracketed, and
+        // the incident behind that fallback was "marking 67 messages left that
+        // one behind" - marking goes through setFlags to this function, so the
+        // path the incident happened in was the one without the fallback.
+        return findByMessageId(client, messageId)
       })
       .catch(() => undefined)
     return found
@@ -322,8 +326,7 @@ export async function setFlags(
   return summarise(outcomes)
 }
 
-/** The mailbox Proton puts discarded messages in. Nothing here empties it. */
-export const TRASH = 'Trash'
+
 
 /**
  * Moves messages to the trash.
