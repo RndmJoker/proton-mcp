@@ -94,10 +94,25 @@ export function registerMessageTools(server: McpServer, connection: Connection):
         since: z
           .string()
           .optional()
-          .describe('Only messages on or after this date, as YYYY-MM-DD.'),
-        before: z.string().optional().describe('Only messages before this date, as YYYY-MM-DD.'),
-        unreadOnly: z.boolean().optional().describe('When true, only unread messages.'),
-        starredOnly: z.boolean().optional().describe('When true, only starred messages.'),
+          .describe(
+            'Only messages the sender dated on or after this day, as YYYY-MM-DD. Compared ' +
+              'against the Date header, which is what the results show.',
+          ),
+        before: z
+          .string()
+          .optional()
+          .describe(
+            'Only messages the sender dated before this day, as YYYY-MM-DD. Compared against ' +
+              'the Date header, which is what the results show.',
+          ),
+        unreadOnly: z
+          .boolean()
+          .optional()
+          .describe('When true, only unread messages. False and omitted both mean no filter.'),
+        starredOnly: z
+          .boolean()
+          .optional()
+          .describe('When true, only starred messages. False and omitted both mean no filter.'),
         largerThan: z
           .number()
           .int()
@@ -118,8 +133,15 @@ export function registerMessageTools(server: McpServer, connection: Connection):
           if (args.subject) criteria.subject = args.subject
           if (args.from) criteria.from = args.from
           if (args.to) criteria.to = args.to
-          if (args.unreadOnly !== undefined) criteria.seen = !args.unreadOnly
-          if (args.starredOnly !== undefined) criteria.flagged = args.starredOnly
+          // Only a true value filters. These used to pass the negation through
+          // whenever the argument was present at all, so `unreadOnly: false`
+          // became `seen: true` and searched for read messages only - the
+          // opposite of what the name says, and the opposite of what the same
+          // argument means one tool over in list_messages, where a falsy value
+          // is simply no filter. `starredOnly: false` searched for messages
+          // that are explicitly not starred.
+          if (args.unreadOnly) criteria.seen = false
+          if (args.starredOnly) criteria.flagged = true
           if (args.largerThan !== undefined) criteria.largerThan = args.largerThan
 
           for (const [name, value] of [

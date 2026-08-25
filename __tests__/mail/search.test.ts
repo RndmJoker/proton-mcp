@@ -24,10 +24,16 @@ describe('buildQuery', () => {
     expect(buildQuery({ to: 'bob@example.com' })).toEqual({ to: 'bob@example.com' })
   })
 
-  it('maps a date range', () => {
+  it('maps a date range onto the sender date, not the delivery date', () => {
+    // sentSince and sentBefore rather than since and before. The latter pair is
+    // IMAP SINCE and BEFORE, which compare INTERNALDATE - when the server
+    // received the message. Everything shown and sorted comes from the envelope,
+    // so from the sender's Date header, and INTERNALDATE can be rewritten when a
+    // message is copied between mailboxes. Filtering one and displaying the
+    // other returned messages whose printed date sat outside the range.
     const since = new Date('2026-07-01')
     const before = new Date('2026-07-31')
-    expect(buildQuery({ since, before })).toEqual({ since, before })
+    expect(buildQuery({ since, before })).toEqual({ sentSince: since, sentBefore: before })
   })
 
   it('distinguishes unread from read rather than treating false as unset', () => {

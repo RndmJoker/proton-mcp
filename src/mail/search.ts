@@ -35,9 +35,13 @@ export interface SearchCriteria {
   from?: string
   /** Substring of a recipient address. */
   to?: string
-  /** Only messages on or after this date. */
+  /**
+   * Only messages the sender dated on or after this. Compared against the Date
+   * header, not against when the server received the message, so it matches the
+   * date every result shows.
+   */
   since?: Date
-  /** Only messages before this date. */
+  /** Only messages the sender dated before this. Same comparison as `since`. */
   before?: Date
   /**
    * Passed straight through as IMAP `SEEN`: true finds read messages, false
@@ -69,14 +73,26 @@ export interface SearchResult {
 
 /** Translates the criteria into what imapflow expects. */
 export function buildQuery(criteria: SearchCriteria): SearchObject {
-  const query: Record<string, unknown> = {}
+  // Typed as what it is rather than built loosely and cast at the end. The cast
+  // was how `since` survived: a field name imapflow does not know is silently
+  // an ignored criterion, so the search returns too much and nothing complains.
+  // With the real type a wrong name is a compile error.
+  const query: SearchObject = {}
 
   if (criteria.text) query.text = criteria.text
   if (criteria.subject) query.header = { subject: criteria.subject }
   if (criteria.from) query.from = criteria.from
   if (criteria.to) query.to = criteria.to
-  if (criteria.since) query.since = criteria.since
-  if (criteria.before) query.before = criteria.before
+  // sentSince and sentBefore, not since and before. Those two are IMAP SINCE
+  // and BEFORE, which compare INTERNALDATE, the moment the server received the
+  // message. Everything this server shows and sorts by comes from the envelope,
+  // so from the sender's Date: header - the comment above fetchDates in
+  // messages.ts explains why, namely that INTERNALDATE can be rewritten when a
+  // message is copied between mailboxes. Filtering on the one and displaying
+  // the other returned messages whose printed date sat outside the range asked
+  // for, and dropped ones inside it.
+  if (criteria.since) query.sentSince = criteria.since
+  if (criteria.before) query.sentBefore = criteria.before
   if (criteria.seen !== undefined) query.seen = criteria.seen
   if (criteria.flagged !== undefined) query.flagged = criteria.flagged
   if (criteria.largerThan !== undefined) query.larger = criteria.largerThan
@@ -90,7 +106,7 @@ export function buildQuery(criteria: SearchCriteria): SearchObject {
     )
   }
 
-  return query as SearchObject
+  return query
 }
 
 /** Whether a query contains the expensive full-text part. */
