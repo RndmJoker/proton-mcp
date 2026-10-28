@@ -371,7 +371,7 @@ The one moment this cannot protect you is the very first connection, which is wh
 | Schemas | `zod` |
 | Tests | Vitest, `node` environment |
 
-Every dependency that ships is permissive: mostly MIT, with MIT-0 (`nodemailer`), BSD-2-Clause (the `htmlparser2` family), BSD-3-Clause (`deepmerge-ts`), ISC (`split2`) and one dual `MIT OR EUPL-1.1+` (`@zone-eu/mailsplit`). Development dependencies add Apache-2.0 and MPL-2.0.
+Every dependency that ships is permissive: mostly MIT, with Apache-2.0 (`@modelcontextprotocol/server` and `@modelcontextprotocol/core`, which are moving from MIT and keep it for older contributions), MIT-0 (`nodemailer`), BSD-2-Clause (the `htmlparser2` family), BSD-3-Clause (`deepmerge-ts`), ISC (`split2`) and one dual `MIT OR EUPL-1.1+` (`@zone-eu/mailsplit`). Development dependencies add MPL-2.0.
 
 ```bash
 npm run build         # compile into dist/
