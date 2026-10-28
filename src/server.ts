@@ -387,8 +387,10 @@ async function main(): Promise<void> {
     // would exit before the last request even starts.
     await new Promise((next) => setTimeout(next, 50))
 
-    // Let running tool calls finish so their answer still goes out. Bounded,
-    // so that a stuck call cannot prevent shutdown.
+    // Let running tool calls finish their work. Their answer no longer goes
+    // out, because the SDK closes the transport once the input ends, but a
+    // message being handed to the Bridge is not cut off halfway. Bounded, so
+    // that a stuck call cannot prevent shutdown.
     const idle = await waitForIdle(5000)
     if (!idle) notify('shutdown forced, a call was still running.')
 

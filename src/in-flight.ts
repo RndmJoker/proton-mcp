@@ -2,9 +2,12 @@
  * Bookkeeping for tool calls that are still running.
  *
  * Background: a stdio server learns that its client is gone by its input
- * stream ending. If it exits right away it cuts off calls that are still in
- * progress and their answer is lost. If it waits forever it hangs whenever a
- * call never returns.
+ * stream ending. The MCP SDK closes the transport at that point, so a call
+ * still in progress no longer gets its answer written; the client has said it
+ * is leaving and is not waiting for one. The work behind the call is another
+ * matter. Exiting right away would cut it off halfway, a message in the middle
+ * of being handed to the Bridge or a draft half replaced. Waiting forever would
+ * hang whenever a call never returns.
  *
  * Hence: keep count, and wait for a bounded grace period on shutdown.
  */

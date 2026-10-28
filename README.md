@@ -241,12 +241,16 @@ Use an absolute path; `~` is not expanded by every client. The setup script prin
 Without any client, by speaking the protocol directly:
 
 ```bash
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
-  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_folders","arguments":{"kind":"system"}}}' \
-  | node dist/server.js
+{
+  printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_folders","arguments":{"kind":"system"}}}'
+  sleep 5
+} | node dist/server.js
 ```
+
+The `sleep` keeps the input open while the answer is on its way. A client signals that it is leaving by closing the server's input, and from that moment no further answer is written, so a plain `printf ... |` only ever gets the reply to `initialize`.
 
 You should see your system mailboxes. If instead you get a message saying the Bridge is probably not running, start and unlock the Bridge and try again. The server explains what to do in its error messages rather than printing error codes.
 
@@ -371,7 +375,7 @@ The one moment this cannot protect you is the very first connection, which is wh
 | Schemas | `zod` |
 | Tests | Vitest, `node` environment |
 
-Every dependency that ships is permissive: mostly MIT, with MIT-0 (`nodemailer`), BSD-2-Clause (the `htmlparser2` family), BSD-3-Clause (`deepmerge-ts`), ISC (`split2`) and one dual `MIT OR EUPL-1.1+` (`@zone-eu/mailsplit`). Development dependencies add Apache-2.0 and MPL-2.0.
+Every dependency that ships is permissive: mostly MIT, with Apache-2.0 (`@modelcontextprotocol/server` and `@modelcontextprotocol/core`, which are moving from MIT and keep it for older contributions), MIT-0 (`nodemailer`), BSD-2-Clause (the `htmlparser2` family), BSD-3-Clause (`deepmerge-ts`), ISC (`split2`) and one dual `MIT OR EUPL-1.1+` (`@zone-eu/mailsplit`). Development dependencies add MPL-2.0.
 
 ```bash
 npm run build         # compile into dist/
