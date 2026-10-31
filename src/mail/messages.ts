@@ -123,6 +123,17 @@ export interface OrderEntry {
 }
 
 /**
+ * The date of an envelope, or nothing when there is none that can be used.
+ *
+ * imapflow hands out the header text itself, not a Date, when it cannot read
+ * the date, and calling getTime() on that text throws. Such a message is
+ * treated as one without a date, which puts it at the end of a listing.
+ */
+export function envelopeDate(value: Date | string | false | undefined): Date | undefined {
+  return value instanceof Date ? value : undefined
+}
+
+/**
  * Reads nothing but the date of each message.
  *
  * This is the cheapest fetch IMAP offers for the purpose: ENVELOPE and nothing
@@ -143,7 +154,7 @@ export async function fetchDates(client: ImapFlow, uids: number[]): Promise<Orde
 
   const entries: OrderEntry[] = []
   for await (const msg of client.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
-    entries.push({ uid: msg.uid, date: msg.envelope?.date })
+    entries.push({ uid: msg.uid, date: envelopeDate(msg.envelope?.date) })
   }
   return entries
 }
@@ -247,7 +258,7 @@ export async function fetchHeaders(client: ImapFlow, uids: number[]): Promise<Me
       subject: env?.subject ?? '',
       from: toAddresses(env?.from),
       to: toAddresses(env?.to),
-      date: env?.date,
+      date: envelopeDate(env?.date),
       size: msg.size ?? 0,
       seen: msg.flags?.has('\\Seen') ?? false,
       flagged: msg.flags?.has('\\Flagged') ?? false,

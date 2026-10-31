@@ -16,6 +16,11 @@ interface FakeMessage {
   seen?: boolean
   size?: number
   attachment?: boolean
+  /**
+   * A Date header imapflow could not read. It then hands out the header text
+   * itself instead of a Date.
+   */
+  unreadableDate?: string
 }
 
 /** Builds a stand-in that answers like imapflow would for these messages. */
@@ -46,7 +51,7 @@ function fakeConnection(messages: FakeMessage[], overrides: Partial<MailboxStatu
             envelope: {
               messageId: `<${m.uid}@example.com>`,
               subject: m.subject,
-              date: m.date ? new Date(m.date) : undefined,
+              date: m.unreadableDate ?? (m.date ? new Date(m.date) : undefined),
               from: [{ name: 'Sender', address: 'sender@example.com' }],
               to: [{ address: 'recipient@example.com' }],
             },
@@ -283,6 +288,19 @@ describe('listMessages ordering', () => {
     ])
     const result = await listMessages(connection, 'INBOX')
     expect(result.headers.map((h) => h.subject)).toEqual(['newer', 'dated', 'undated'])
+  })
+
+  it('sorts a message whose date could not be read to the end, rather than failing', async () => {
+    // imapflow passes an unreadable Date header on as text, and getTime() on
+    // text throws. Up to 0.4.11 one such message broke the whole listing.
+    const connection = fakeConnection([
+      { uid: 1, subject: 'dated', date: '2026-07-10T10:00:00Z' },
+      { uid: 2, subject: 'unreadable', date: '', unreadableDate: 'sometime last week' },
+      { uid: 3, subject: 'newer', date: '2026-07-29T10:00:00Z' },
+    ])
+    const result = await listMessages(connection, 'INBOX')
+    expect(result.headers.map((h) => h.subject)).toEqual(['newer', 'dated', 'unreadable'])
+    expect(result.headers[2]?.date).toBeUndefined()
   })
 
   it('reports what the ordering cost, so the price is visible rather than guessed', async () => {
