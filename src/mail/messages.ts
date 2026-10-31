@@ -76,7 +76,9 @@ export interface ListResult {
   ordering: OrderingCost
 }
 
-export function toAddresses(list: Array<{ name?: string; address?: string }> | undefined): Address[] {
+export function toAddresses(
+  list: Array<{ name?: string | undefined; address?: string | undefined }> | undefined,
+): Address[] {
   if (!list) return []
   const out: Address[] = []
   for (const entry of list) {

@@ -46,9 +46,9 @@
     "@modelcontextprotocol/server": "^2.3.1",
     "html-to-text": "^10.0.1",
     "htmlparser2": "^12.0.0",
-    "imapflow": "^1.6.5",
-    "mailparser": "^3.10.0",
-    "nodemailer": "^10.1.7",
+    "imapflow": "^2.10.0",
+    "mailparser": "^3.14.1",
+    "nodemailer": "^10.3.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
