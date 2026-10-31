@@ -127,12 +127,21 @@ export class Connection {
     // Pin the certificate before handing over any credentials. On first use this
     // records what it finds, afterwards it verifies. A changed certificate stops
     // us here rather than after the password has gone out.
+    //
+    // Reading the certificate is the first thing that reaches the Bridge, so a
+    // Bridge that is not running shows up here, as a bare socket error. Measured
+    // before this was translated: "Unexpected error while listing mailboxes:
+    // Error: connect ECONNREFUSED", where the explanation below was meant to be.
     const pinned = await ensurePinned(this.config.host, this.config.imapPort, {
       onFirstUse: (entry) =>
         this.notify(
           `recorded the Bridge certificate on first use, fingerprint ${entry.fingerprint256}. ` +
             'Further connections are verified against it.',
         ),
+    }).catch((error: unknown) => {
+      throw error instanceof BridgeError
+        ? error
+        : explainError(error, this.config.host, this.config.imapPort)
     })
 
     const client = new ImapFlow({

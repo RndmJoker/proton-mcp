@@ -42,7 +42,7 @@
 
 import { createTransport, type Transporter } from 'nodemailer'
 import type { Config, BridgeCredentials } from '../config.js'
-import { BridgeError } from '../bridge/errors.js'
+import { BridgeError, explainError } from '../bridge/errors.js'
 import { ensurePinned } from '../bridge/certificate.js'
 import { buildMessage, allRecipients, type Draft } from './compose.js'
 
@@ -70,7 +70,12 @@ async function transport(
   // connection happens. Measured to be the same certificate on the SMTP port,
   // so this is the material to verify against; a difference fails the
   // handshake rather than being waved through.
-  const pinned = await ensurePinned(config.host, config.imapPort)
+  //
+  // It is also the first thing that reaches the Bridge, so a Bridge that is not
+  // running fails here, before the try that explains SMTP failures.
+  const pinned = await ensurePinned(config.host, config.imapPort).catch((error: unknown) => {
+    throw error instanceof BridgeError ? error : explainError(error, config.host, config.imapPort)
+  })
 
   return createTransport({
     host: config.host,
