@@ -17,6 +17,7 @@
 import type { SearchObject } from 'imapflow'
 import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
+import { searchUids } from './uid-search.js'
 import {
   fetchDates,
   fetchHeaders,
@@ -142,10 +143,7 @@ export async function searchMessages(
 
   const uids = await connection.withMailbox(path, async (client, status): Promise<number[]> => {
     if (status.messages === 0) return []
-    const hits = await client.search(query, { uid: true })
-    // imapflow answers with false rather than an empty array when a search
-    // yields nothing, and `?? []` would let that through.
-    return Array.isArray(hits) ? hits : []
+    return searchUids(client, query, `messages in "${path}"`)
   })
 
   const elapsedMs = Math.round(Number(process.hrtime.bigint() - started) / 1e6)

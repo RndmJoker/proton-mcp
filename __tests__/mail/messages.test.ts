@@ -84,6 +84,19 @@ const many = (count: number): FakeMessage[] =>
   }))
 
 describe('listMessages', () => {
+  it('reports a failed search as a failure, not as an empty mailbox', async () => {
+    // imapflow answers a failed search with false, and a mailbox with messages
+    // in it would otherwise be reported as holding none.
+    const status: MailboxStatus = { path: 'INBOX', messages: 3, unseen: 0, uidValidity: '1', uidNext: 4 }
+    const connection = {
+      withMailbox: async (_path: string, operation: (c: unknown, s: MailboxStatus) => Promise<unknown>) =>
+        operation({ search: async () => false }, status),
+    } as unknown as Connection
+    await expect(listMessages(connection, 'INBOX')).rejects.toThrow(
+      /The search for the messages in "INBOX" failed/,
+    )
+  })
+
   it('returns nothing for an empty mailbox without fetching', async () => {
     // Crucial: the Bridge answers FETCH on an empty mailbox with
     // "BAD no such message" instead of an empty result.

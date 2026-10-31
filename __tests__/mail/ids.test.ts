@@ -158,6 +158,26 @@ describe('findByMessageId', () => {
     expect(uid).toBe(12)
   })
 
+  it('says the search failed rather than that the message is missing', async () => {
+    // imapflow answers a failed search with false. Read as "no hits", every tool
+    // that takes an id would report a message that may well be there as missing.
+    // The second attempt would find it, so only the first one can be what refuses.
+    const answers: Array<number[] | false> = [false, [7]]
+    const failingFirst = {
+      search: async () => answers.shift(),
+      fetchOne: async () => ({ envelope: { messageId: '<a@example.com>' } }),
+    } as never
+    await expect(findByMessageId(failingFirst, '<a@example.com>')).rejects.toThrow(
+      /The search for the message <a@example\.com> failed/,
+    )
+  })
+
+  it('says so as well when only the second attempt failed', async () => {
+    const answers: Array<number[] | false> = [[], false]
+    const failingLater = { search: async () => answers.shift() } as never
+    await expect(findByMessageId(failingLater, '<a@example.com>')).rejects.toThrow(/failed/)
+  })
+
   it('answers with nothing when the message is not there', async () => {
     const uid = await findByMessageId(
       fakeClient([{ uid: 7, header: '<b@example.com>' }]),

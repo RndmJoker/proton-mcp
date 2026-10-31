@@ -11,6 +11,7 @@ import type { ImapFlow } from 'imapflow'
 import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
 import { resolveMessageId, presentMessageId, ALL_MAIL, TRASH } from './ids.js'
+import { searchUids } from './uid-search.js'
 import { parseMessage, type ParsedMessage, type Address } from '../mime/parse.js'
 
 /** Upper bound for one listing. Deliberately low, callers can page. */
@@ -305,11 +306,12 @@ export async function listMessages(
       return { path, total: 0, offset, headers: [], ordering: nothing }
     }
 
-    const uids = await client.search(
+    const uids = await searchUids(
+      client,
       options.unreadOnly ? { seen: false } : { all: true },
-      { uid: true },
+      `the messages in "${path}"`,
     )
-    if (!uids || uids.length === 0) {
+    if (uids.length === 0) {
       return { path, total: 0, offset, headers: [], ordering: nothing }
     }
 

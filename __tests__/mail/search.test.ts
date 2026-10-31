@@ -105,12 +105,12 @@ describe('searchMessages', () => {
     expect(result.headers).toEqual([])
   })
 
-  it('treats the false that imapflow returns as no matches', async () => {
-    // imapflow answers with false rather than an empty array, and `?? []` would
-    // let that through as a value.
-    const result = await searchMessages(fakeConnection(false), 'All Mail', { text: 'nothing' })
-    expect(result.total).toBe(0)
-    expect(result.headers).toEqual([])
+  it('reports a failed search as a failure, not as no matches', async () => {
+    // imapflow answers a search that matched nothing with an empty array, and
+    // one that failed with false. Up to 0.4.11 both read as "no matches".
+    await expect(
+      searchMessages(fakeConnection(false), 'All Mail', { text: 'nothing' }),
+    ).rejects.toThrow(/The search for messages in "All Mail" failed/)
   })
 
   it('does not search an empty mailbox at all', async () => {
