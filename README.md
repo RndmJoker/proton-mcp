@@ -288,7 +288,7 @@ Formatting changes what a confirmation has to show, and that is the interesting 
 - **Text a recipient can read that the body does not show.** Measured: an image's alt text never appears in the converted body, and mail clients block remote images by default, so the alt text is frequently what the recipient actually reads. That was a way past the confirmation, and it is closed.
 - **Every property beyond ordinary formatting**, when `extended` was used, with the ones that really put something out of sight marked as such.
 
-What no level permits is `style` blocks, `script`, event handlers, `data:` addresses and comments. Comments look inert and are not: Outlook runs conditional ones, so a `<style>` block inside a comment reaches those recipients as markup while the confirmation and the preview see a comment. Addresses are checked wherever they appear, a CSS `background: url(...)` included, and every one of them is listed on the preview page. The line runs between describing a document and running inside it or reaching out of it: a `<style>` in the quote of a reply restyles the answer written above it, and 66 percent of real formatted mail carries one. Attachments from files on this machine are deliberately not supported either: a path named by a model, read by the server and carried out by the next confirmation is not a feature, it is a way out for anything on your disk. Forwarding loses nothing all the same, because the original message travels along whole, embedded images included.
+What no level permits is `style` blocks, `script`, event handlers, `data:` addresses and comments. Comments look inert and are not: Outlook runs conditional ones, so a `<style>` block inside a comment reaches those recipients as markup while the confirmation and the preview see a comment. Addresses are checked wherever they appear, a CSS `background: url(...)` included, and every one of them is listed on the preview page. The line runs between describing a document and running inside it or reaching out of it: a `<style>` in the quote of a reply restyles the answer written above it, and 66 percent of real formatted mail carries one. Attachments from files on this machine are not supported today: a path named by a model, read by the server and carried out by the next confirmation would be a way out for anything on your disk. [#17](https://github.com/RndmJoker/proton-mcp/issues/17) tracks a version that reads only from a directory you have set yourself, and stays off until you do. Forwarding loses nothing all the same, because the original message travels along whole, embedded images included.
 
 One thing worth knowing about drafts: Proton rewrites the thread headers of anything it stores. A reply is built with `In-Reply-To` and `References`, and what comes back has neither, only Proton's own internal thread id. Threading a stored draft is therefore Proton's business rather than this server's.
 
@@ -301,6 +301,7 @@ Mail is text written by strangers, handed to a model that can call tools. A mess
 - **Nothing is sent without a person saying yes.** The first call never sends. It returns a question through your client naming the sender, every recipient separated into To, Cc and Bcc, and the subject. Only the second call, carrying your answer, sends.
 - **The question is short, and the message is somewhere with room.** It carries no part of the message itself; it links to a page in the local interface where you can read it as the recipient will see it, with every address in full. That split exists because the question used to grow with the message: 74 lines for a newsletter-shaped one, at which point the confirm button sat below the bottom of the dialog and nothing could be sent at all.
 - **Recipients are never summarised**, however many there are. Seeing three of eight would mean agreeing to a send to five strangers.
+- **The address you confirm is the address the message goes to.** Every recipient is read back through the code that builds the envelope, and refused if it would come out as another address or as none. An address with a character outside ASCII is refused as well: letters from another script can spell a familiar domain, and the message would go to a different one that anyone can register. A domain that really is written with such letters can be given in its `xn--` form, which is then exactly what you confirm.
 - **The answer goes through your client, never through the browser.** That page has no confirm button and will not get one: the address of the interface reaches your assistant, so a control there could be operated by the thing it is supervising.
 - **There is no setting that turns the question off.** Not an environment variable, not an argument, not a mode.
 - **A client that cannot ask cannot send.** If your client does not support form elicitation, sending is refused and you are pointed at drafts instead. That is deliberately different from the sign-in prompt, which falls back to text: the worst outcome there is an inconvenience, and here it is a message that cannot be recalled. What counts as "can ask" is the capability your client declares, read from the request when the protocol revision carries it there and from the handshake otherwise.
@@ -319,7 +320,7 @@ Only these, all under `~/.config/proton-mcp/` (on Windows `%USERPROFILE%\.config
 | File | When | What is in it |
 | :--- | :--- | :--- |
 | `known-certificate.json` | On the first connection | The Bridge's certificate and its fingerprint |
-| `settings.json` | When you change the ports in the interface | Two port numbers |
+| `settings.json` | When you change the ports or dismiss the notice in the interface | The two Bridge ports, and whether the notice that this is not an official Proton tool was dismissed |
 | `credentials.enc` | Only if you chose the encrypted file | Your Bridge password, encrypted with your master password |
 | `env` | Only if you put it there yourself | Your Bridge password in plain text |
 
@@ -413,7 +414,7 @@ The CI in `.github/workflows/ci.yml` runs the tests, the type check, the build, 
 
 ```bash
 npm test
-npx tsc --noEmit
+npm run typecheck
 npm run build
 npm audit --omit=dev
 ```

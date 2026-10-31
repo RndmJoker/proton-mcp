@@ -5,11 +5,11 @@
  * same thing and must not drift: the recipients a confirmation shows have to
  * be the recipients that are written or sent, or the confirmation is theatre.
  *
- * No attachment can be read from disk here, and that is deliberate rather than
- * unfinished. An attachment taken from a path would mean the model names a
- * file, the server reads it, and the next confirmation the user waves through
- * carries it outside. Which paths may be reached is its own decision, not a
- * side effect of being able to write a draft.
+ * No attachment can be read from disk here, and that is deliberate. An
+ * attachment taken from a path would mean the model names a file, the server
+ * reads it, and the next confirmation the user waves through carries it
+ * outside. Which paths may be reached is its own decision, made in #17 rather
+ * than as a side effect of being able to write a draft.
  */
 
 import MailComposer from 'nodemailer/lib/mail-composer/index.js'
