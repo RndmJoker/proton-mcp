@@ -13,6 +13,7 @@
  */
 
 import MailComposer from 'nodemailer/lib/mail-composer/index.js'
+import MimeNode from 'nodemailer/lib/mime-node'
 import { createHash, randomUUID } from 'node:crypto'
 import { BridgeError } from '../bridge/errors.js'
 import {
@@ -99,13 +100,83 @@ export interface InlinePart {
 }
 
 /**
+ * Control characters, and the formatting ones that reorder text or take up no
+ * space. In a display name they change how a recipient reads in the
+ * confirmation without changing where the message goes: U+202E reverses
+ * everything after it.
+ */
+const INVISIBLE = /[\p{Cc}\p{Cf}]/u
+
+/** Names each invisible character by its code point, so a refusal can show it. */
+function showInvisible(value: string): string {
+  return value.replace(
+    /[\p{Cc}\p{Cf}]/gu,
+    (c) => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`,
+  )
+}
+
+/**
+ * Refuses a recipient that reads one way in the confirmation and goes somewhere
+ * else, or nowhere, once the message is sent.
+ *
+ * Applied to every recipient a message can carry, whether a caller typed it or
+ * it was read back from a stored draft. The confirmation is only worth
+ * something if what it shows is what the envelope carries.
+ */
+export function assertDeliverable(recipient: Recipient): void {
+  const { name, address } = recipient
+
+  if (name !== undefined && INVISIBLE.test(name)) {
+    throw new BridgeError(
+      `The display name "${showInvisible(name)}" contains a control or formatting character. Such ` +
+        'a character can change how a recipient reads in the confirmation, for example by reversing ' +
+        'the text after it, so it is refused rather than removed.',
+    )
+  }
+
+  // Letters from another script can spell a familiar domain, and the envelope
+  // then carries its punycode form, which is a different domain anyone can
+  // register. Measured with nodemailer 10.1.7: ceo@\u0430\u0440\u0440\u04cf\u0435.com, all Cyrillic,
+  // reads as apple.com and goes to ceo@xn--80ak6aa92e.com.
+  if (/[^\x21-\x7e]/.test(address)) {
+    throw new BridgeError(
+      `"${showInvisible(address)}" contains a character outside ASCII. Letters from another script ` +
+        'can spell a familiar domain while the message goes to a different one, so such an address ' +
+        'is refused. A domain that really is written with such letters can be given in its ASCII ' +
+        'form, which starts with xn--, and that is then exactly what the confirmation shows.',
+    )
+  }
+
+  // nodemailer reads the address again, with its own parser, when it builds the
+  // envelope, and the two readings disagree. Measured with 10.1.7:
+  // "x@example.com:y" leaves the envelope empty, "a:b@example.com" goes to
+  // b@example.com. So the address has to come back out of the very code that
+  // builds the envelope as itself. Only the domain may change, to lower case.
+  const at = address.lastIndexOf('@')
+  const expected = address.slice(0, at) + address.slice(at).toLowerCase()
+  const envelope = new MimeNode()
+    .setEnvelope({ from: 'check@example.invalid', to: [address] })
+    .getEnvelope().to
+  if (envelope.length !== 1 || envelope[0] !== expected) {
+    const outcome = envelope.length === 0 ? 'names no recipient at all' : `goes to ${envelope.join(', ')}`
+    throw new BridgeError(
+      `"${showInvisible(address)}" would not reach that address: read the way the message is sent, ` +
+        `it ${outcome}. Give the address on its own, without a comment in parentheses, a group ` +
+        'name or a colon.',
+    )
+  }
+}
+
+/**
  * Checks an address well enough to catch the mistakes that matter.
  *
  * Not a full RFC 5322 parser, and not trying to be: the point is to refuse a
  * string that would end up somewhere unintended, not to adjudicate exotic but
- * legal forms. A newline is the one that has to be caught, because a header
- * injected through an address field would let the sender of a mail the model
- * just read add a recipient the confirmation never showed.
+ * legal forms. A newline is the one that has to be caught first, because a
+ * header injected through an address field would let the sender of a mail the
+ * model just read add a recipient the confirmation never showed. Everything
+ * else that would make the confirmation and the envelope disagree is
+ * assertDeliverable's.
  */
 export function parseRecipient(input: string): Recipient {
   const raw = input.trim()
@@ -128,7 +199,9 @@ export function parseRecipient(input: string): Recipient {
         'optionally as "Display Name <name@example.com>".',
     )
   }
-  return name ? { name, address } : { address }
+  const recipient = name ? { name, address } : { address }
+  assertDeliverable(recipient)
+  return recipient
 }
 
 export function parseRecipients(list: string[] | undefined): Recipient[] {

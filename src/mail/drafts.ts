@@ -47,6 +47,8 @@ import { getMessage, listMessages, type ListResult } from './messages.js'
 import { htmlToText } from '../mime/parse.js'
 import type { MarkupLevel } from './markup.js'
 import {
+  allRecipients,
+  assertDeliverable,
   buildMessage,
   mintMessageId,
   parseRecipient,
@@ -279,6 +281,9 @@ export async function updateDraft(
     ...markupOf(changes, current),
     messageId: id,
   }
+  // The recipients carried over were read back from the stored draft rather
+  // than typed, and have not been through parseRecipient.
+  allRecipients(draft).forEach(assertDeliverable)
 
   const raw = await buildMessage(draft, { keepBcc: true })
   const uid = await appendDraft(connection, raw)
@@ -631,6 +636,10 @@ export async function readDraftForSending(
         'update_draft first.',
     )
   }
+  // A stored draft may have been written anywhere, in Proton itself included,
+  // so its recipients are held to the same rule as typed ones before the
+  // confirmation shows them.
+  for (const recipient of [...stored.to, ...stored.cc, ...stored.bcc]) assertDeliverable(recipient)
 
   return {
     from: parseRecipient(fromAddress),

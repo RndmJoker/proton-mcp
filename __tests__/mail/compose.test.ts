@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { createTransport } from 'nodemailer'
 import {
   parseRecipient,
   parseRecipients,
@@ -60,6 +61,93 @@ describe('parseRecipient', () => {
       { address: 'b@example.com' },
     ])
     expect(parseRecipients(undefined)).toEqual([])
+  })
+})
+
+describe('a recipient reads in the confirmation as it is sent', () => {
+  // Each case below passed the check up to 0.4.11, was shown in the
+  // confirmation as written, and went somewhere else or nowhere. Measured with
+  // nodemailer 10.1.7, which builds the envelope.
+  it('refuses an address the envelope would read differently', () => {
+    const cases: Array<[string, RegExp]> = [
+      ['x@example.com:y', /names no recipient at all/],
+      ['user(@example.com)example.org', /names no recipient at all/],
+      ['ceo@example.com:', /names no recipient at all/],
+      ['a@example.com(x)example.org', /goes to a@example\.com\./],
+      ['example.com(x)@example.org', /goes to example\.com@example\.org\./],
+      ['a:b@example.com', /goes to b@example\.com\./],
+    ]
+    for (const [input, outcome] of cases) {
+      expect(() => parseRecipient(input), input).toThrow(/would not reach that address/)
+      expect(() => parseRecipient(input), input).toThrow(outcome)
+    }
+  })
+
+  it('refuses an address outside ASCII, however familiar it looks', () => {
+    // ceo@\u0430\u0440\u0440\u04cf\u0435.com is all Cyrillic, reads as apple.com, and was sent to
+    // xn--80ak6aa92e.com, a domain anyone can register.
+    for (const input of [
+      'ceo@\u0430\u0440\u0440\u04cf\u0435.com',
+      'ceo@\u0435xample.com',
+      'j\u00fcrgen@example.com',
+      'ceo@example.com\u202e',
+    ]) {
+      expect(() => parseRecipient(input), input).toThrow(/outside ASCII/)
+    }
+  })
+
+  it('names an invisible character instead of printing it', () => {
+    // Printed as it is, U+202E would reverse the rest of the refusal itself.
+    try {
+      parseRecipient('ceo@example.com\u202e')
+      expect.unreachable()
+    } catch (error) {
+      expect((error as Error).message).toContain('U+202E')
+      expect((error as Error).message).not.toContain('\u202e')
+    }
+  })
+
+  it('refuses a control or formatting character in a display name', () => {
+    for (const input of [
+      'Jane \u202eeoD <jane@example.com>',
+      'Jane\u200b <jane@example.com>',
+      'Jane\u0007 <jane@example.com>',
+    ]) {
+      expect(() => parseRecipient(input), input).toThrow(/control or formatting character/)
+    }
+  })
+
+  it('keeps a display name in any script', () => {
+    expect(parseRecipient('J\u00fcrgen M\u00fcller <j@example.com>')).toEqual({
+      name: 'J\u00fcrgen M\u00fcller',
+      address: 'j@example.com',
+    })
+    expect(parseRecipient('\u0418\u0432\u0430\u043d <ivan@example.com>').name).toBe(
+      '\u0418\u0432\u0430\u043d',
+    )
+  })
+
+  it('reaches a domain with other letters through its xn-- form', () => {
+    expect(parseRecipient('ceo@xn--80ak6aa92e.com')).toEqual({ address: 'ceo@xn--80ak6aa92e.com' })
+  })
+
+  it('sends to exactly the address it accepted', async () => {
+    // The promise itself, checked with the real library rather than a stand-in.
+    const transport = createTransport({ streamTransport: true, buffer: true })
+    for (const input of [
+      'you@example.com',
+      'Jane.Doe@Example.COM',
+      'a+tag@sub.example.co.uk',
+      'ceo@xn--80ak6aa92e.com',
+      'Jane Doe <jane@example.com>',
+    ]) {
+      const { address } = parseRecipient(input)
+      const info = await transport.sendMail({
+        raw: 'Subject: x\r\n\r\nx\r\n',
+        envelope: { from: 'me@example.com', to: [address] },
+      })
+      expect(info.envelope.to.map((a) => a.toLowerCase()), input).toEqual([address.toLowerCase()])
+    }
   })
 })
 

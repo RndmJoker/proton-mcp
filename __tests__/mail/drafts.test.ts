@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { createDraft, updateDraft, replyDraft, forwardDraft, DRAFTS } from '../../src/mail/drafts.js'
+import {
+  createDraft,
+  updateDraft,
+  replyDraft,
+  forwardDraft,
+  readDraftForSending,
+  DRAFTS,
+} from '../../src/mail/drafts.js'
 import { BridgeError } from '../../src/bridge/errors.js'
 import type { Connection, MailboxStatus } from '../../src/bridge/connection.js'
 
@@ -40,6 +47,12 @@ const SOURCE = [
   '',
   'The actual text of the message.',
 ].join('\r\n')
+
+/** The same message, addressed to a domain spelt in Cyrillic that reads as apple.com. */
+const LOOKALIKE = SOURCE.replace(
+  'To: me@example.com, other@example.com',
+  'To: me@example.com, ceo@\u0430\u0440\u0440\u04cf\u0435.com',
+)
 
 function fakeConnection(options: FakeOptions = {}) {
   const recorded: Recorded = { appends: [], deletes: [], opened: [] }
@@ -199,6 +212,33 @@ describe('updateDraft', () => {
     ).rejects.toThrow(/read-only/)
     expect(recorded.deletes).toEqual([])
     expect(recorded.opened).toEqual([])
+  })
+
+  it('holds a recipient carried over from the stored draft to the same rule', async () => {
+    // Carried over, a recipient never passes through parseRecipient.
+    const { connection, recorded } = fakeConnection({ source: LOOKALIKE })
+    await expect(
+      updateDraft(connection, false, ME, '<original@example.com>', { subject: 'Changed' }),
+    ).rejects.toThrow(BridgeError)
+    expect(recorded.appends).toEqual([])
+    expect(recorded.deletes).toEqual([])
+  })
+})
+
+describe('readDraftForSending', () => {
+  it('reads a stored draft back with its recipients', async () => {
+    const { connection } = fakeConnection()
+    const draft = await readDraftForSending(connection, ME, '<original@example.com>')
+    expect(draft.to.map((r) => r.address)).toEqual(['me@example.com', 'other@example.com'])
+  })
+
+  it('refuses a stored recipient that would read differently once sent', async () => {
+    // A draft can be written anywhere, in Proton itself included. Its
+    // recipients reach the confirmation without being typed by anyone here.
+    const { connection } = fakeConnection({ source: LOOKALIKE })
+    await expect(readDraftForSending(connection, ME, '<original@example.com>')).rejects.toThrow(
+      BridgeError,
+    )
   })
 })
 
