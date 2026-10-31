@@ -241,6 +241,14 @@ export class Connection {
     const st = await this.#withRetry((client) =>
       client.status(path, { messages: true, unseen: true, uidValidity: true, uidNext: true }),
     )
+    // imapflow answers a STATUS it could not complete with false rather than
+    // an error. Read as zero messages, the mailbox would look empty.
+    if (!st) {
+      throw new BridgeError(
+        `The Bridge did not report the state of "${path}", so it cannot be said how many messages ` +
+          'it holds. Try again, and if it fails again, check that the Bridge is running and unlocked.',
+      )
+    }
     return {
       path,
       messages: st.messages ?? 0,
