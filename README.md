@@ -313,7 +313,7 @@ Mail is text written by strangers, handed to a model that can call tools. A mess
 - **A client that cannot ask cannot send.** If your client does not support form elicitation, sending is refused and you are pointed at drafts instead. That is deliberately different from the sign-in prompt, which falls back to text: the worst outcome there is an inconvenience, and here it is a message that cannot be recalled. What counts as "can ask" is the capability your client declares, read from the request when the protocol revision carries it there and from the handshake otherwise.
 - **Your yes covers one specific message.** A fingerprint of the sender, every recipient, the subject and the body is sealed with an HMAC whose key exists only in the running process, and it travels with the question. On the way back the fingerprint is recomputed from what is being asked for now. If a single address was added in between, nothing is sent. A confirmation is also bound to the tool that asked, so one cannot be reused for another.
 - **Blind copies stay blind.** They travel in the envelope and never appear in the headers the recipients see. Verified against a real delivery.
-- **The Bridge password is protected on the way out too.** SMTP is verified against the same pinned certificate as IMAP, and STARTTLS is required rather than merely attempted.
+- **The Bridge password is protected on the way out too.** IMAP and SMTP are both verified against the same pinned certificate, and on both STARTTLS is required rather than merely attempted. Something listening on the port that offers no encryption gets no password.
 
 Replying and forwarding exist as sending tools of their own, not just as drafts. The reason is measured: Proton rewrites the thread headers of anything it stores, so a reply written to a draft and sent later loses the chain, while a reply handed straight to SMTP keeps its `In-Reply-To` and stays in the conversation.
 
@@ -355,7 +355,7 @@ The names alone say something. A folder `Banking/Revolut` reveals your bank, `Ta
 
 The Bridge generates its own certificate and keeps it inside its encrypted vault rather than on disk, so it cannot be trusted in advance. Switching verification off would mean anything that manages to listen on the port gets your Bridge password.
 
-Instead the certificate is **pinned on first use**. The first connection records its fingerprint in `~/.config/proton-mcp/known-certificate.json` and reports it on stderr. The web interface shows it too, along with the date it was recorded. Every connection after that is verified against that one certificate, which is stricter than the public trust store: a certificate signed by a recognised authority would not do.
+Instead the certificate is **pinned on first use**. The first connection records its fingerprint in `~/.config/proton-mcp/known-certificate.json` and reports it on stderr. The web interface shows it too, along with the date it was recorded. Every connection after that is verified against that one certificate, which is stricter than the public trust store: a certificate signed by a recognised authority would not do. The check happens in the connection's own handshake, before the password is sent. The certificate is read on a connection of its own only on first use and after a connection failed, to tell whether the certificate is what changed.
 
 If the certificate ever changes, the server refuses to connect and says so:
 
