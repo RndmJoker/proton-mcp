@@ -5,14 +5,15 @@
  * same thing and must not drift: the recipients a confirmation shows have to
  * be the recipients that are written or sent, or the confirmation is theatre.
  *
- * No attachment can be read from disk here, and that is deliberate rather than
- * unfinished. An attachment taken from a path would mean the model names a
- * file, the server reads it, and the next confirmation the user waves through
- * carries it outside. Which paths may be reached is its own decision, not a
- * side effect of being able to write a draft.
+ * No attachment can be read from disk here, and that is deliberate. An
+ * attachment taken from a path would mean the model names a file, the server
+ * reads it, and the next confirmation the user waves through carries it
+ * outside. Which paths may be reached is its own decision, made in #17 rather
+ * than as a side effect of being able to write a draft.
  */
 
 import MailComposer from 'nodemailer/lib/mail-composer/index.js'
+import MimeNode from 'nodemailer/lib/mime-node'
 import { createHash, randomUUID } from 'node:crypto'
 import { BridgeError } from '../bridge/errors.js'
 import {
@@ -24,6 +25,7 @@ import {
 } from './markup.js'
 import { prepareQuotedMarkup } from './quote.js'
 import { htmlToText } from '../mime/parse.js'
+import type { CarriedFile } from '../mime/parts.js'
 
 /** An address, optionally with a display name. */
 export interface Recipient {
@@ -57,8 +59,13 @@ export interface Draft {
    * replayed for the unwarned one.
    */
   markupLevel?: MarkupLevel
-  /** A whole message carried along, used when forwarding. */
-  attachedMessage?: { filename: string; raw: Buffer }
+  /**
+   * A whole message carried along, used when forwarding.
+   *
+   * `carries` names the attachments travelling inside it. Only for telling the
+   * assistant what the original held; the bytes are in `raw`.
+   */
+  attachedMessage?: { filename: string; raw: Buffer; carries?: string[] }
   /**
    * The message as markup, when it has any.
    *
@@ -87,6 +94,21 @@ export interface Draft {
   quotedHtml?: string
   /** Files referenced from the markup by content id. */
   inlineParts?: InlinePart[]
+  /**
+   * The markup body of a stored draft, read back to be sent or kept, and kept
+   * apart from `html` on purpose.
+   *
+   * It is not held to the permitted set again. It was held to it when it was
+   * written through this server, or a person wrote it in Proton. Once stored,
+   * the composed part and a quote can no longer be told apart, and the level
+   * it was written at is recorded nowhere, so a second check refused every
+   * formatted reply on the <style> of its quote. It is read the way a quote
+   * is instead: the confirmation counts and the preview names everything in
+   * it, and anything beyond `standard` carries the same warning as `extended`.
+   */
+  storedHtml?: string
+  /** Files read back from a stored draft, carried along as they were stored. */
+  carriedFiles?: CarriedFile[]
 }
 
 /** A file carried inside the message and referenced from the markup. */
@@ -99,13 +121,83 @@ export interface InlinePart {
 }
 
 /**
+ * Control characters, and the formatting ones that reorder text or take up no
+ * space. In a display name they change how a recipient reads in the
+ * confirmation without changing where the message goes: U+202E reverses
+ * everything after it.
+ */
+const INVISIBLE = /[\p{Cc}\p{Cf}]/u
+
+/** Names each invisible character by its code point, so a refusal can show it. */
+function showInvisible(value: string): string {
+  return value.replace(
+    /[\p{Cc}\p{Cf}]/gu,
+    (c) => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`,
+  )
+}
+
+/**
+ * Refuses a recipient that reads one way in the confirmation and goes somewhere
+ * else, or nowhere, once the message is sent.
+ *
+ * Applied to every recipient a message can carry, whether a caller typed it or
+ * it was read back from a stored draft. The confirmation is only worth
+ * something if what it shows is what the envelope carries.
+ */
+export function assertDeliverable(recipient: Recipient): void {
+  const { name, address } = recipient
+
+  if (name !== undefined && INVISIBLE.test(name)) {
+    throw new BridgeError(
+      `The display name "${showInvisible(name)}" contains a control or formatting character. Such ` +
+        'a character can change how a recipient reads in the confirmation, for example by reversing ' +
+        'the text after it, so it is refused rather than removed.',
+    )
+  }
+
+  // Letters from another script can spell a familiar domain, and the envelope
+  // then carries its punycode form, which is a different domain anyone can
+  // register. Measured with nodemailer 10.1.7: ceo@\u0430\u0440\u0440\u04cf\u0435.com, all Cyrillic,
+  // reads as apple.com and goes to ceo@xn--80ak6aa92e.com.
+  if (/[^\x21-\x7e]/.test(address)) {
+    throw new BridgeError(
+      `"${showInvisible(address)}" contains a character outside ASCII. Letters from another script ` +
+        'can spell a familiar domain while the message goes to a different one, so such an address ' +
+        'is refused. A domain that really is written with such letters can be given in its ASCII ' +
+        'form, which starts with xn--, and that is then exactly what the confirmation shows.',
+    )
+  }
+
+  // nodemailer reads the address again, with its own parser, when it builds the
+  // envelope, and the two readings disagree. Measured with 10.1.7:
+  // "x@example.com:y" leaves the envelope empty, "a:b@example.com" goes to
+  // b@example.com. So the address has to come back out of the very code that
+  // builds the envelope as itself. Only the domain may change, to lower case.
+  const at = address.lastIndexOf('@')
+  const expected = address.slice(0, at) + address.slice(at).toLowerCase()
+  const envelope = new MimeNode()
+    .setEnvelope({ from: 'check@example.invalid', to: [address] })
+    .getEnvelope().to
+  if (envelope.length !== 1 || envelope[0] !== expected) {
+    const outcome = envelope.length === 0 ? 'names no recipient at all' : `goes to ${envelope.join(', ')}`
+    throw new BridgeError(
+      `"${showInvisible(address)}" would not reach that address: read the way the message is sent, ` +
+        `it ${outcome}. Give the address on its own, without a comment in parentheses, a group ` +
+        'name or a colon.',
+    )
+  }
+}
+
+/**
  * Checks an address well enough to catch the mistakes that matter.
  *
  * Not a full RFC 5322 parser, and not trying to be: the point is to refuse a
  * string that would end up somewhere unintended, not to adjudicate exotic but
- * legal forms. A newline is the one that has to be caught, because a header
- * injected through an address field would let the sender of a mail the model
- * just read add a recipient the confirmation never showed.
+ * legal forms. A newline is the one that has to be caught first, because a
+ * header injected through an address field would let the sender of a mail the
+ * model just read add a recipient the confirmation never showed. Everything
+ * else that would make the confirmation and the envelope disagree is
+ * assertDeliverable's.
  */
 export function parseRecipient(input: string): Recipient {
   const raw = input.trim()
@@ -128,7 +220,9 @@ export function parseRecipient(input: string): Recipient {
         'optionally as "Display Name <name@example.com>".',
     )
   }
-  return name ? { name, address } : { address }
+  const recipient = name ? { name, address } : { address }
+  assertDeliverable(recipient)
+  return recipient
 }
 
 export function parseRecipients(list: string[] | undefined): Recipient[] {
@@ -191,7 +285,28 @@ export async function buildMessage(
     date: new Date(),
   }
 
-  if (draft.html === undefined) {
+  if (draft.html !== undefined && draft.storedHtml !== undefined) {
+    // One body or the other. Both would mean the composed part had been checked
+    // and the stored part would go out beside it unread.
+    throw new BridgeError('A message cannot carry composed markup and a stored body at once.')
+  }
+
+  if (draft.storedHtml !== undefined) {
+    // Not checked against the permitted set, see Draft.storedHtml. What is
+    // still checked is that every picture it shows arrived with it.
+    const provided = new Set([
+      ...(draft.inlineParts ?? []).map((part) => part.contentId),
+      ...(draft.carriedFiles ?? []).flatMap((file) => (file.contentId ? [file.contentId] : [])),
+    ])
+    const missing = readMarkup(draft.storedHtml, 'extended').contentIds.filter((id) => !provided.has(id))
+    if (missing.length) {
+      throw new BridgeError(
+        `The stored draft refers to ${missing.map((id) => `"cid:${id}"`).join(', ')}, but no such ` +
+          'file is stored with it. Open the draft in Proton and attach the picture again.',
+      )
+    }
+    fields.html = draft.storedHtml
+  } else if (draft.html === undefined) {
     fields.text = draft.text
   } else {
     // Checked here rather than only at the tool, so that no path into this
@@ -201,7 +316,10 @@ export async function buildMessage(
     // Every content id the markup points at has to have arrived with it. A
     // reference to a part that is not there shows the recipient a broken image
     // where the sender saw a picture, and neither of them finds out why.
-    const provided = new Set((draft.inlineParts ?? []).map((part) => part.contentId))
+    const provided = new Set([
+      ...(draft.inlineParts ?? []).map((part) => part.contentId),
+      ...(draft.carriedFiles ?? []).flatMap((file) => (file.contentId ? [file.contentId] : [])),
+    ])
     const missing = reading.contentIds.filter((id) => !provided.has(id))
     if (missing.length) {
       throw new BridgeError(
@@ -231,6 +349,14 @@ export async function buildMessage(
       content: part.content,
       contentType: part.contentType,
       cid: part.contentId,
+    })
+  }
+  for (const file of draft.carriedFiles ?? []) {
+    attachments.push({
+      filename: file.filename,
+      content: file.content,
+      contentType: file.contentType,
+      ...(file.contentId ? { cid: file.contentId } : {}),
     })
   }
   if (attachments.length) fields.attachments = attachments
@@ -465,6 +591,7 @@ export const PLAIN_TEXT_NOTE =
  * to, and that is exactly the difference a person confirming a send has to see.
  */
 export function readableBody(draft: Draft): string {
+  if (draft.storedHtml !== undefined) return htmlToText(draft.storedHtml)
   return draft.html === undefined
     ? draft.text
     : htmlToText(draft.html + (draft.quotedHtml ?? ''))
@@ -479,6 +606,7 @@ export function readableBody(draft: Draft): string {
  * before their own words appear.
  */
 export function composedBody(draft: Draft): string {
+  if (draft.storedHtml !== undefined) return htmlToText(draft.storedHtml)
   return draft.html === undefined ? draft.text : htmlToText(draft.html)
 }
 
@@ -516,6 +644,28 @@ export function summariseQuote(draft: Draft): QuoteSummary | undefined {
   }
 }
 
+/** The line this server writes above every forwarded message, in text and in markup. */
+export const FORWARD_HEADER = '---------- Forwarded message ----------'
+
+/**
+ * Whether the message carries a quoted one, for the count line of the
+ * confirmation.
+ *
+ * summariseQuote only sees a quote that is still held apart from the body,
+ * which is the case while a reply or a forward is composed with markup. Once a
+ * draft is stored, and in a plain text reply, the quote is part of the body,
+ * and up to 0.4.11 the confirmation said nothing about it. It is recognised
+ * there by what quotes it: the forward header this server writes, the "wrote:"
+ * line followed by quoted lines, or a blockquote, which is how Proton quotes.
+ */
+export function carriesQuote(draft: Draft): boolean {
+  if (draft.quotedHtml) return true
+  if (draft.storedHtml !== undefined) {
+    return /<blockquote\b/i.test(draft.storedHtml) || draft.storedHtml.includes(FORWARD_HEADER)
+  }
+  return draft.text.includes(FORWARD_HEADER) || /^On .+ wrote:\n>/m.test(draft.text)
+}
+
 /**
  * Everything the message points at or carries, for the confirmation.
  *
@@ -534,11 +684,18 @@ export function describeAttachments(draft: Draft): string[] {
   for (const part of draft.inlineParts ?? []) {
     lines.push(`${part.filename} (${part.contentType}, ${part.content.length} bytes, in the message body)`)
   }
+  for (const file of draft.carriedFiles ?? []) {
+    const where = file.contentId ? ', in the message body' : ''
+    lines.push(
+      `${file.filename} (${file.contentType}, ${file.content.length} bytes, stored with the draft${where})`,
+    )
+  }
   return lines
 }
 
 /** The addresses in a message's markup, with the text they are shown as. */
 export function describeUrls(draft: Draft): MarkupUrl[] {
+  if (draft.storedHtml !== undefined) return readMarkup(draft.storedHtml, 'extended').urls
   return draft.html === undefined
     ? []
     : assertSendableMarkup(draft.html, draft.markupLevel ?? 'standard').urls
@@ -546,6 +703,7 @@ export function describeUrls(draft: Draft): MarkupUrl[] {
 
 /** Text a recipient can read that the readable body leaves out. */
 export function hiddenTextOf(draft: Draft): string[] {
+  if (draft.storedHtml !== undefined) return readMarkup(draft.storedHtml, 'extended').hiddenText
   return draft.html === undefined
     ? []
     : assertSendableMarkup(draft.html, draft.markupLevel ?? 'standard').hiddenText
@@ -565,6 +723,20 @@ export function fingerprintPart(content: Buffer): string {
  * "what did it use" is a list rather than a promise.
  */
 export function styleNotesOf(draft: Draft): StyleNote[] {
+  if (draft.storedHtml !== undefined) return readMarkup(draft.storedHtml, 'extended').styleNotes
   if (draft.html === undefined) return []
   return assertSendableMarkup(draft.html, draft.markupLevel ?? 'standard').styleNotes
+}
+
+/**
+ * What a stored body carries that no composed message may: style blocks,
+ * scripts, event handlers, data: addresses, comments.
+ *
+ * Empty for anything that is not a stored draft, because composed markup with
+ * such a thing never gets this far. For a stored draft it is part of what the
+ * confirmation warns about, since it was not checked again on the way out.
+ */
+export function storedBeyondOf(draft: Draft): string[] {
+  if (draft.storedHtml === undefined) return []
+  return readMarkup(draft.storedHtml, 'extended').problems.map((problem) => problem.found)
 }

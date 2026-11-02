@@ -42,8 +42,8 @@
 
 import { createTransport, type Transporter } from 'nodemailer'
 import type { Config, BridgeCredentials } from '../config.js'
-import { BridgeError } from '../bridge/errors.js'
-import { ensurePinned } from '../bridge/certificate.js'
+import { BridgeError, explainError, isConnectionFailure } from '../bridge/errors.js'
+import { certificateChanged, pinFor, type PinnedCertificate } from '../bridge/certificate.js'
 import { buildMessage, allRecipients, type Draft } from './compose.js'
 
 export interface SendOutcome {
@@ -62,16 +62,11 @@ export interface SendOutcome {
  * Built per send rather than held open. Sending is rare, and a connection that
  * sits idle holding the Bridge password is a worse trade than a handshake.
  */
-async function transport(
+function transport(
   config: Config,
   credentials: BridgeCredentials,
-): Promise<Transporter> {
-  // The pin is recorded against the IMAP port because that is where the first
-  // connection happens. Measured to be the same certificate on the SMTP port,
-  // so this is the material to verify against; a difference fails the
-  // handshake rather than being waved through.
-  const pinned = await ensurePinned(config.host, config.imapPort)
-
+  pinned: PinnedCertificate,
+): Transporter {
   return createTransport({
     host: config.host,
     port: config.smtpPort,
@@ -136,7 +131,18 @@ export async function sendMessage(
   // below, where the other recipients never see them.
   const raw = await buildMessage(draft, { keepBcc: false })
 
-  const mailer = await transport(config, credentials)
+  // The pin is recorded against the IMAP port because that is where the first
+  // connection happens. Measured to be the same certificate on the SMTP port,
+  // so this is the material to verify against; a difference fails the
+  // handshake rather than being waved through.
+  //
+  // On first use reading it is the first thing that reaches the Bridge, so a
+  // Bridge that is not running fails here, before the try below.
+  const pinned = await pinFor(config.host, config.imapPort).catch((error: unknown) => {
+    throw error instanceof BridgeError ? error : explainError(error, config.host, config.imapPort)
+  })
+
+  const mailer = transport(config, credentials, pinned)
   try {
     const info = await mailer.sendMail({
       // The bytes, not the fields: what was confirmed is what goes out.
@@ -153,6 +159,14 @@ export async function sendMessage(
       response: info.response ?? '',
     }
   } catch (error) {
+    // A certificate other than the pinned one fails the handshake before AUTH,
+    // and from here that looks like any other failure. Only now is a probe
+    // worth it.
+    const changed = await certificateChanged(config.host, config.imapPort, pinned)
+    if (changed) throw changed
+    // With a pin there is no probe in front of the send any more, so a Bridge
+    // that is not running is first noticed here, and is explained the same way.
+    if (isConnectionFailure(error)) throw explainError(error, config.host, config.smtpPort)
     throw new BridgeError(
       `The Bridge did not accept the message: ${(error as Error).message}. ` +
         'Nothing was sent, and it can be sent again once the Bridge is reachable.',

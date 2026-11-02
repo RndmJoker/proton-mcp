@@ -23,11 +23,14 @@ import {
   type StoreKind,
   type StoreDescription,
 } from './store.js'
+import { KERNEL_KEYRING_NOTE, prepareSessionBus, type KeyringBackend } from './session-bus.js'
 
 export interface StoreAvailability extends StoreDescription {
   available: boolean
   /** Why it cannot be used. Only set when available is false. */
   reason?: string
+  /** What the option means on this machine, when that differs from its description. */
+  note?: string
   /** How long the probe took, for diagnostics. Only for the keyring. */
   probeMs?: number
 }
@@ -90,9 +93,16 @@ export function probeKeyring(timeoutMs = PROBE_TIMEOUT_MS): Promise<ProbeResult>
  * offered deserves an answer instead of a shorter list.
  */
 export async function listStores(
-  options: { probe?: (timeoutMs?: number) => Promise<ProbeResult>; os?: string } = {},
+  options: {
+    probe?: (timeoutMs?: number) => Promise<ProbeResult>
+    os?: string
+    /** Which store the keyring library uses. Replaced in tests. */
+    backend?: () => KeyringBackend
+  } = {},
 ): Promise<StoreAvailability[]> {
   const probe = options.probe ?? probeKeyring
+  // Before the probe, so that the child it forks inherits the same address.
+  const backend = (options.backend ?? prepareSessionBus)()
 
   const started = Date.now()
   const keyring = await probe()
@@ -104,6 +114,9 @@ export async function listStores(
       entry.available = keyring.ok
       entry.probeMs = probeMs
       if (!keyring.ok) entry.reason = keyring.reason
+      // The probe succeeds in the kernel's keyring too, so a working keyring
+      // alone does not say which one it is.
+      else if (backend === 'kernel') entry.note = KERNEL_KEYRING_NOTE
     }
     return entry
   })

@@ -477,6 +477,8 @@ const STYLES = `
   .who::before { content: "Best for: "; font-weight: 600; color: var(--muted); }
   .blocked { font-size: 13px; margin: 6px 0; color: var(--bad-text); }
   .blocked::before { content: "Not available here: "; font-weight: 600; }
+  .here { font-size: 13px; margin: 6px 0; color: var(--warn-text); }
+  .here::before { content: "On this machine: "; font-weight: 600; }
 
   /*
    * The message waiting to be sent.

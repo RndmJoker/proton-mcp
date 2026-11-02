@@ -385,7 +385,10 @@ export function registerSendTools(server: McpServer, deps: SendDependencies): vo
     {
       title: 'Send a draft',
       description:
-        `Sends a draft that is already in "${DRAFTS}". The draft is not removed afterwards: this ` +
+        `Sends a draft that is already in "${DRAFTS}", exactly as it was stored, its files ` +
+        'included. Its markup is not checked against the levels again, because it was when the ' +
+        'draft was written; the confirmation warns when it carries more than standard. ' +
+        'The draft is not removed afterwards: this ' +
         'server does not follow a send it deliberately does not verify with a second write. ' +
         'Use trash_messages on the draft once the message shows up in Sent. ' +
         `${CONFIRMATION_NOTE}`,

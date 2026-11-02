@@ -45,19 +45,30 @@ all, say so and stop: there is nothing to update, and the setup guide at
 
 ### Installed through npx
 
-Nothing has to be installed, but **npm caches packages**, so `npx` can keep
-running a version from days ago without saying so. Clear it for this package:
+**Usually nothing has to be done here.** The npm that comes with Node.js 24
+asks the registry for a newer version every time `npx` starts a package that
+was given by name only, and `npx -y @rndmjoker/proton-mcp` is exactly that. The
+restart in step 3 is what brings the new version in.
 
-```bash
-npm cache clean --force
-npx -y @rndmjoker/proton-mcp@latest --version 2>/dev/null || true
-```
-
-Then check what the registry has and what will now be used:
+Check what the registry has:
 
 ```bash
 npm view @rndmjoker/proton-mcp version
 ```
+
+If the client still runs an older version after the restart, remove this
+package's entry from the npx cache and restart again. The first command lists
+the entries, each as a key followed by the package; the second removes the one
+whose package is `@rndmjoker/proton-mcp`:
+
+```bash
+npm cache npx ls
+npm cache npx rm <key>
+```
+
+Do not reach for `npm cache clean --force`. It empties npm's whole download
+cache, and it leaves the npx entries, which live in a directory of their own,
+exactly where they were.
 
 ### Installed globally
 
@@ -96,8 +107,9 @@ command instead of three.
 server keeps the old code, and nothing about that is visible from the outside,
 which is the most common way an update appears not to have worked.
 
-The releases are at https://github.com/RndmJoker/proton-mcp/releases and each one
-says what changed and why. Read the entries between the version that was
+The releases are at https://github.com/RndmJoker/proton-mcp/releases and say
+what changed and why. 0.4.6 and 0.4.8 to 0.4.10 have no release of their own;
+the notes of 0.4.11 cover them. Read the entries between the version that was
 installed and the one now installed, and summarise them in a sentence or two.
 That is more useful than a version number: it tells them what to try.
 
@@ -127,5 +139,7 @@ If a version ever does need something from the user, the release notes say so.
   the credentials were cleared, not an update problem. The server answers with
   the address of its local page; the user signs in there, never in the chat.
 - **Going back to an older version** is possible with npm:
-  `npx -y @rndmjoker/proton-mcp@0.4.3`. Say which version and why, so it does not
-  become a permanent unexplained pin.
+  `npx -y @rndmjoker/proton-mcp@<version>`, with a version that
+  `npm view @rndmjoker/proton-mcp versions` lists. Not every number between two
+  releases was published. Say which version and why, so it does not become a
+  permanent unexplained pin.

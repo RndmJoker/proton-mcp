@@ -60,6 +60,8 @@ export interface PendingData {
    * chosen. Empty for almost every message.
    */
   styleNotes: Array<{ property: string; value: string; element: string; hides: boolean }>
+  /** Set for a stored draft: what the check on composed markup would have refused. */
+  stored?: { beyond: string[] }
 }
 
 /** A row of recipients, or nothing when that field is empty. */
@@ -126,7 +128,7 @@ ever written, and it is the reason this list is never shortened.</p>
  * Sorted so those come first. Somebody who reads three rows and stops should
  * have read the three that matter.
  */
-function styleTable(notes: PendingData['styleNotes']): string {
+function styleTable(notes: PendingData['styleNotes'], stored: boolean): string {
   if (notes.length === 0) return ''
 
   const sorted = [...notes].sort((a, b) => Number(b.hides) - Number(a.hides))
@@ -158,8 +160,37 @@ ${
   <tr><th>Property</th><th>Value</th><th>On</th><th>Effect</th></tr>
   ${rows}
 </table>
-<p class="hint">These were permitted because the message asked for markup level "extended". At
-"standard" they would have been refused with a reason instead.</p>
+<p class="hint">${
+    stored
+      ? 'This is a stored draft, sent as it was stored. A message written here at markup level ' +
+        '"standard" could not have used them.'
+      : 'These were permitted because the message asked for markup level "extended". At ' +
+        '"standard" they would have been refused with a reason instead.'
+  }</p>
+</div>`
+}
+
+/**
+ * What a stored draft carries that no composed message may.
+ *
+ * A stored draft is sent as it was stored, because once stored its own part
+ * and its quote can no longer be told apart. This is what the check on a
+ * composed message would have refused, listed once each, so that the person
+ * answering knows what they are agreeing to send unchecked.
+ */
+function storedNotice(stored: PendingData['stored']): string {
+  if (!stored) return ''
+  const distinct = [...new Set(stored.beyond)]
+  const list = distinct.length
+    ? `<p>It carries what a message written here may not contain, ${stored.beyond.length} time(s) in all:</p>
+<ul>${distinct.map((item) => `<li><code>${escapeHtml(item)}</code></li>`).join('')}</ul>`
+    : '<p>It carries nothing a message written here could not contain.</p>'
+  return `<h2>Sent as it was stored</h2>
+<div class="card">
+<p>This is a draft that was already stored, and it goes out exactly as it is there, its files
+included. Its markup is not checked again: it was checked when it was written through this
+server, or it was written in Proton.</p>
+${list}
 </div>`
 }
 
@@ -224,7 +255,8 @@ ${recipientRow('Bcc', data.bcc)}
 <h2>Every address in it (${data.urls.length})</h2>
 ${urlTable(data.urls)}
 
-${styleTable(data.styleNotes)}
+${styleTable(data.styleNotes, data.stored !== undefined)}
+${storedNotice(data.stored)}
 ${hidden}
 ${files}
 ${quoted}`,

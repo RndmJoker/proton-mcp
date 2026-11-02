@@ -84,14 +84,20 @@ export interface WebInterfaceOptions {
   /**
    * Called when the user signs in. Returns an error message to show, or nothing
    * on success. The master password is only set for the encrypted-file store.
+   *
+   * A warning is a sign-in that worked but left something to do, such as an
+   * earlier password that could not be removed from another store (#53).
    */
   onSignIn: (
     credentials: Credentials,
     store: StoreKind,
     masterPassword?: string,
-  ) => Promise<string | undefined>
-  /** Called when the user signs out. */
-  onSignOut: () => Promise<void>
+  ) => Promise<string | undefined | { warning: string }>
+  /**
+   * Called when the user signs out. Returns what could not be removed, to show
+   * as an error, or nothing when every store is empty (#52).
+   */
+  onSignOut: () => Promise<string | undefined | void>
   /**
    * Opens an existing encrypted credentials file. Returns an error message to
    * show, or nothing on success.
@@ -100,8 +106,11 @@ export interface WebInterfaceOptions {
    * this cannot get here.
    */
   onUnlock?: (masterPassword: string) => Promise<string | undefined>
-  /** Throws the encrypted file away, for a forgotten master password. */
-  onDiscardEncrypted?: () => Promise<void>
+  /**
+   * Throws the encrypted file away, for a forgotten master password. Returns
+   * why it could not be deleted, or nothing.
+   */
+  onDiscardEncrypted?: () => Promise<string | undefined | void>
   /** Supplies what the status page shows. */
   getStatus: () => Promise<StatusSnapshot>
   /**
@@ -423,15 +432,17 @@ export class WebInterface {
       return
     }
     if (writing && path === '/discard-encrypted') {
-      await this.#options.onDiscardEncrypted?.()
+      const failure = await this.#options.onDiscardEncrypted?.()
       // Both of these end with nobody signed in, so the section asked for is
       // beside the point: #render lands on the sign-in form either way.
-      await this.#render('overview', response)
+      await this.#render('overview', response, failure ? { error: failure } : {})
       return
     }
     if (writing && path === '/sign-out') {
-      await this.#options.onSignOut()
-      await this.#render('overview', response)
+      // What could not be removed is shown where the user looks next. A plain
+      // sign-in form would read as a clean sign-out, which it was not (#52).
+      const left = await this.#options.onSignOut()
+      await this.#render('overview', response, left ? { error: left } : {})
       return
     }
 
@@ -841,11 +852,13 @@ export class WebInterface {
       }
     }
 
-    const error = await this.#options.onSignIn({ user: address, pass: password }, store, master)
+    const outcome = await this.#options.onSignIn({ user: address, pass: password }, store, master)
     // No password is kept anywhere in this class, whatever the outcome.
-    await this.#render('overview', response, {
-      ...(error ? { error, address, store } : {}),
-    })
+    if (typeof outcome === 'string' && outcome) {
+      await this.#render('overview', response, { error: outcome, address, store })
+      return
+    }
+    await this.#render('overview', response, typeof outcome === 'object' ? { error: outcome.warning } : {})
   }
 }
 

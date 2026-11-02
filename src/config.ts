@@ -35,6 +35,12 @@ export interface Config {
   readOnly: boolean
   /** Port for the local web interface. Fixed for the life of the process. */
   webPort: number
+  /**
+   * Where save_attachment may write, from PROTON_MCP_ATTACHMENT_DIR. Absent
+   * means saving is off. Only from the environment, never from the web
+   * interface, whose address an assistant receives; see saved-attachments.ts.
+   */
+  attachmentDir: string | undefined
 }
 
 /** Credentials, whether they come from the environment or from a store. */
@@ -154,6 +160,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     smtpPort: port(env.BRIDGE_SMTP_PORT, 1025, 'BRIDGE_SMTP_PORT'),
     readOnly: env.PROTON_MCP_READ_ONLY === 'true',
     webPort: port(env.PROTON_MCP_WEB_PORT, 7345, 'PROTON_MCP_WEB_PORT'),
+    attachmentDir: env.PROTON_MCP_ATTACHMENT_DIR?.trim() || undefined,
   }
 }
 

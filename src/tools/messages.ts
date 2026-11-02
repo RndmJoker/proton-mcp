@@ -12,7 +12,7 @@ import { describeFailure, withSignIn } from './failures.js'
 import { track } from '../in-flight.js'
 import { listMessages, getMessage, MAX_LIST_LIMIT } from '../mail/messages.js'
 import { getAttachment } from '../mail/attachments.js'
-import { searchMessages, type SearchOptions } from '../mail/search.js'
+import { MAX_COMPARED, searchMessages, type SearchOptions } from '../mail/search.js'
 import { ALL_MAIL } from '../mail/ids.js'
 import { formatList, formatMessage, formatSearch, formatSize, wrapUntrusted } from './format.js'
 
@@ -79,7 +79,12 @@ export function registerMessageTools(server: McpServer, connection: Connection):
         'Searches a mailbox by text, subject, sender, recipient, date range, read state, star or size. ' +
         'At least one criterion is required. Returns headers only, newest first across pages, with paging. ' +
         'A full-text search walks the local database of the Bridge and takes a few seconds on a large ' +
-        'mailbox, while criteria such as unread or date are fast. Searching "All Mail" covers every ' +
+        'mailbox, while criteria such as unread or date are fast. Subject, sender and recipient are ' +
+        'compared by this server against the decoded headers, so umlauts and spaces match as written, ' +
+        'in any case; without a date range that reads the headers of the whole mailbox, at most the ' +
+        `${MAX_COMPARED} most recently added, and the answer says when that limit was reached. ` +
+        'Full text cannot reach attachments or parts sent as base64, which the answer says as well. ' +
+        'Searching "All Mail" covers every ' +
         'mailbox including trash, and entries that are in the trash are marked "in trash" - the ' +
         'other marks are flags rather than places, so "draft" says a message is one, not that it ' +
         'is in Drafts.',

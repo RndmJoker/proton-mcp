@@ -29,6 +29,10 @@ let ports: Array<{ imapPort: number; smtpPort: number }>
 let failWith: string | undefined
 /** Set to make saving the ports fail, as an unwritable settings file would. */
 let portFailure: string | undefined
+/** What sign-out, sign-in or discarding could not remove, as the session reports it. */
+let signOutLeft: string | undefined
+let signInWarning: string | undefined
+let discardFailure: string | undefined
 
 function build(options: { allowPorts?: boolean } = {}): WebInterface {
   return new WebInterface({
@@ -48,10 +52,11 @@ function build(options: { allowPorts?: boolean } = {}): WebInterface {
       signIns.push({ ...credentials, store, ...(master ? { master } : {}) })
       state.connected = true
       if (store === 'encrypted-file') state.locked = false
-      return undefined
+      return signInWarning ? { warning: signInWarning } : undefined
     },
     onSignOut: async () => {
       state.connected = false
+      return signOutLeft
     },
     onUnlock: async (master) => {
       unlocks.push(master)
@@ -62,7 +67,9 @@ function build(options: { allowPorts?: boolean } = {}): WebInterface {
     },
     onDiscardEncrypted: async () => {
       discards++
+      if (discardFailure) return discardFailure
       state.locked = false
+      return undefined
     },
     getStatus: async () => ({
       connected: state.connected,
@@ -85,6 +92,9 @@ beforeEach(async () => {
   ports = []
   failWith = undefined
   portFailure = undefined
+  signOutLeft = undefined
+  signInWarning = undefined
+  discardFailure = undefined
 
   web = build()
   token = new URL(await web.start()).searchParams.get('token') ?? ''
@@ -417,6 +427,49 @@ describe('unlocking a stored encrypted file', () => {
     })
     expect(res.status).toBe(404)
     expect(discards).toBe(0)
+  })
+
+  it('says why the file could not be thrown away', async () => {
+    discardFailure = 'The encrypted file could not be deleted. Delete it by hand.'
+    const page = await send(`/?token=${token}`)
+    const res = await send(`/discard-encrypted?token=${token}`, {
+      csrf: csrfFrom(page.body, '/discard-encrypted'),
+    })
+    expect(res.body).toContain(discardFailure)
+  })
+})
+
+describe('when not everything stored can be removed', () => {
+  it('shows what sign-out left behind, not a clean sign-in form alone (#52)', async () => {
+    state.connected = true
+    signOutLeft = 'Signed out here, but not everywhere. The keyring entry could not be removed.'
+    const page = await send(`/credentials?token=${token}`)
+    const res = await send(`/sign-out?token=${token}`, { csrf: csrfFrom(page.body, '/sign-out') })
+    expect(res.body).toContain(signOutLeft)
+    expect(res.body).toContain('Connect to Proton Mail Bridge')
+  })
+
+  it('shows nothing extra after a clean sign-out', async () => {
+    state.connected = true
+    const page = await send(`/credentials?token=${token}`)
+    const res = await send(`/sign-out?token=${token}`, { csrf: csrfFrom(page.body, '/sign-out') })
+    expect(res.body).toContain('Connect to Proton Mail Bridge')
+    expect(res.body).not.toContain('not everywhere')
+  })
+
+  it('shows a sign-in that worked but left an earlier password elsewhere (#53)', async () => {
+    signInWarning = 'Signed in. An earlier one is still stored elsewhere, though.'
+    const page = await send(`/?token=${token}`)
+    const res = await send(`/sign-in?token=${token}`, {
+      csrf: csrfFrom(page.body, '/sign-in'),
+      store: 'session',
+      address: 'someone@example.com',
+      password: 'bridge-password',
+    })
+    expect(signIns).toHaveLength(1)
+    expect(res.body).toContain(signInWarning)
+    // Signed in all the same: the overview, not the form again.
+    expect(res.body).not.toContain('name="password"')
   })
 })
 

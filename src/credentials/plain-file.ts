@@ -15,6 +15,7 @@ import { dirname } from 'node:path'
 import { platform } from 'node:os'
 import type { CredentialStore, Credentials } from './store.js'
 import { credentialsPath, parseEnvFile, permissionWarning } from '../config.js'
+import { BridgeError } from '../bridge/errors.js'
 
 export class PlainFileStore implements CredentialStore {
   readonly kind = 'plain-file' as const
@@ -73,8 +74,14 @@ export class PlainFileStore implements CredentialStore {
   async clear(): Promise<void> {
     try {
       await unlink(this.path)
-    } catch {
-      // Already gone is the outcome we wanted.
+    } catch (error) {
+      // Already gone is the outcome we wanted. Anything else leaves the
+      // password where the next start reads it again (#52).
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw new BridgeError(
+        `The plain file ${this.path} could not be deleted: ${(error as Error).message}. It holds the ` +
+          'Bridge password in plain text, so delete it by hand.',
+      )
     }
   }
 }

@@ -2,6 +2,10 @@
 
 An MCP server for Proton Mail. It talks to a locally running Proton Mail Bridge and makes your mailbox available to AI assistants such as Claude.
 
+> **Unofficial.** proton-mcp is not made by, affiliated with or endorsed by Proton AG. "Proton" and "Proton Mail" are their trademarks.
+>
+> **Largely AI-generated.** Most of the code, tests and documentation in this repository were written by Anthropic's Claude Opus models. I decide what gets built and how, and I note this on every one of my projects that is largely AI-generated.
+
 **Status: under construction.** Reading works and can be used, and so does signing in through the browser. Labels, moving between folders, read state, trash, drafts and sending all work. Every send asks you first, and that question is enforced by the server rather than requested in a prompt. See [Status](#status) for the details.
 
 ## Why everything runs locally
@@ -18,23 +22,25 @@ This server therefore runs on your machine as well, started by the AI client as 
 | :--- | :--- |
 | `list_folders` | Lists folders and labels, grouped by kind |
 | `list_messages` | Headers of a mailbox, newest first, with paging. In "All Mail" the discarded ones are marked as such |
-| `search_messages` | Full text, subject, sender, recipient, date range, read state, star, size. Dates are the sender's, matching what the results show |
+| `search_messages` | Full text, subject, sender, recipient, date range, read state, star, size. Dates are the sender's, matching what the results show. Subject, sender and recipient match umlauts and spaces as written. Full text cannot reach attachments or parts sent as base64, and the answer says so |
 | `get_message` | One message as readable text, HTML converted, budgeted |
 | `get_attachment` | One attachment by index, textual types only |
+| `save_attachment` | Saves one attachment as a file into the directory you set in `PROTON_MCP_ATTACHMENT_DIR`, so the assistant can open it. Deleted again after an hour and when the server stops, see [Saved attachments](#saved-attachments) |
+| `delete_saved_attachments` | Deletes files `save_attachment` wrote, all of them or the ones named, and nothing else |
 | `add_label` | Applies an existing label. The message stays in its folder |
 | `remove_label` | Removes a label. Folder, other labels and the message itself are untouched |
 | `move_messages` | Moves messages into a folder. Labels survive the move |
 | `set_flags` | Marks read or unread and sets or clears the star |
 | `trash_messages` | Moves messages to the trash, which is what deletion means here |
 | `create_draft` | Writes a draft. Nothing is sent |
-| `update_draft` | Replaces a draft, keeping its id |
+| `update_draft` | Replaces a draft, keeping its id and the files stored with it |
 | `reply_draft` | Prepares a reply as a draft, with the original quoted |
 | `forward_draft` | Prepares a forward as a draft, attachments and all |
 | `list_drafts` | The drafts, newest first |
 | `send_message` | Composes and sends. Asks you first, always |
 | `send_reply` | Replies and sends, keeping the conversation intact |
 | `send_forward` | Forwards and sends, attachments and all |
-| `send_draft` | Sends a draft that is already written |
+| `send_draft` | Sends a draft that is already written, exactly as it was stored |
 | `open_configuration` | Hands back the address of the local web interface, with the token that opens it |
 | `check_for_updates` | Asks npm whether a newer version exists. The only thing here that contacts anything but your own machine, and only when called |
 
@@ -75,7 +81,7 @@ This table says what the server cannot do today. The issue behind each entry say
 | Choosing in the interface how much markup a message may carry. The levels exist and a caller picks one per message; what is missing is a ceiling the caller cannot raise | [#24](https://github.com/RndmJoker/proton-mcp/issues/24) |
 | A fixed extra recipient the assistant cannot remove | [#18](https://github.com/RndmJoker/proton-mcp/issues/18) |
 
-**Binary attachments** are missing from that table on purpose. They are not an unfinished feature waiting for its turn: `get_attachment` refuses anything that is not text and says why. Handing one over would mean either base64 in the context window, which is unusable, or writing decrypted content to your disk, which this server does not do. Changing that needs a decision first, not an implementation, so there is nothing to track yet.
+**Binary attachments** are not returned as text: base64 in the context window would be unusable. `save_attachment` writes one to a directory you name instead, and it is off until you name one, see [Saved attachments](#saved-attachments).
 
 ### What will never exist
 
@@ -90,7 +96,7 @@ These limits come from the Bridge itself and cannot be worked around:
 ## Requirements
 
 - **A paid Proton plan.** The Bridge is not included in the free tier.
-- **Proton Mail Bridge**, installed, running and unlocked. The official application expects a desktop. On a machine without one, [proton-mail-bridge-docker](https://github.com/RndmJoker/proton-mail-bridge-docker) runs it in a container instead. That is a way to get a bridge, not a way to put one somewhere else: it decrypts your mail wherever it runs, so a bridge on another machine means your mail is decrypted on that machine. The section above still applies, and the container's own readme says the same.
+- **Proton Mail Bridge**, installed, running and unlocked. Tried against versions 3.25.0 and 3.27.1. The official application expects a desktop. On a machine without one, [proton-mail-bridge-docker](https://github.com/RndmJoker/proton-mail-bridge-docker) runs it in a container instead. That is a way to get a bridge, not a way to put one somewhere else: it decrypts your mail wherever it runs, so a bridge on another machine means your mail is decrypted on that machine. The section above still applies, and the container's own readme says the same.
 - **Node.js 24 or newer.**
 - **The Bridge password**, which is not your Proton account password. The Bridge generates one per account. You find it in the Bridge application under the account, or in a terminal via `protonmail-bridge --cli` and then `info`.
 
@@ -198,7 +204,11 @@ Then it asks where the password should be kept. All four options are supported a
 
 The interface probes the keyring at runtime rather than guessing from the operating system, because the same Linux with and without a graphical session is a different machine as far as a keyring is concerned. An option that cannot work is shown greyed out with the actual reason.
 
+On Linux the system keyring is the desktop's, GNOME Keyring or KWallet, reached over D-Bus. MCP clients usually start a server without the address of that bus, so the server looks for it in the usual place itself. Where there is no desktop session, on a server or in a container, the keyring library uses the kernel's keyring instead. That one keeps the password in memory only: it is gone after a restart, and after three days without use by default. The sign-in page says so when that is the case.
+
 If you pick the encrypted file, every later start shows an unlock page asking for that master password alone. Forget it and nothing anywhere can recover the file; the page offers to throw it away so you can sign in afresh.
+
+**Signing in again replaces what was stored.** The password then lives only where you chose last, and every other place is emptied. **Signing out empties all four.** If one of them cannot be emptied, a file the server may not delete for instance, the page says which and how to remove it by hand, because until then the next start signs in with it again.
 
 #### Without a browser
 
@@ -263,7 +273,7 @@ The content of someone else's email is text written by strangers, and it is hand
 - **Sending always requires your confirmation**, enforced in the server rather than in a system prompt. There is no switch to turn it off, and a client that cannot ask the question cannot send.
 - **There will be no permanent deletion**, and no tools for filters, forwarding, account or key settings. A hijacked session must not be able to leave behind lasting access.
 - **HTML is never passed through raw** and external content is never fetched. Tracking pixels stay ineffective.
-- **No message ever touches your disk.** No cache, no index, no copies. Anything this server wrote down would be your mail in plain text, outside the encryption you pay Proton for.
+- **Your mail is not kept on your disk.** No cache, no index, no copies. Anything this server wrote down would be your mail in plain text, outside the encryption you pay Proton for. The one exception is an attachment you have the assistant save, into a directory you chose, for an hour at most, see [Saved attachments](#saved-attachments).
 
 ### Writing to your mailbox
 
@@ -288,9 +298,11 @@ Formatting changes what a confirmation has to show, and that is the interesting 
 - **Text a recipient can read that the body does not show.** Measured: an image's alt text never appears in the converted body, and mail clients block remote images by default, so the alt text is frequently what the recipient actually reads. That was a way past the confirmation, and it is closed.
 - **Every property beyond ordinary formatting**, when `extended` was used, with the ones that really put something out of sight marked as such.
 
-What no level permits is `style` blocks, `script`, event handlers, `data:` addresses and comments. Comments look inert and are not: Outlook runs conditional ones, so a `<style>` block inside a comment reaches those recipients as markup while the confirmation and the preview see a comment. Addresses are checked wherever they appear, a CSS `background: url(...)` included, and every one of them is listed on the preview page. The line runs between describing a document and running inside it or reaching out of it: a `<style>` in the quote of a reply restyles the answer written above it, and 66 percent of real formatted mail carries one. Attachments from files on this machine are deliberately not supported either: a path named by a model, read by the server and carried out by the next confirmation is not a feature, it is a way out for anything on your disk. Forwarding loses nothing all the same, because the original message travels along whole, embedded images included.
+What no level permits is `style` blocks, `script`, event handlers, `data:` addresses and comments. Comments look inert and are not: Outlook runs conditional ones, so a `<style>` block inside a comment reaches those recipients as markup while the confirmation and the preview see a comment. Addresses are checked wherever they appear, a CSS `background: url(...)` included, and every one of them is listed on the preview page. The line runs between describing a document and running inside it or reaching out of it: a `<style>` in the quote of a reply restyles the answer written above it, and 66 percent of real formatted mail carries one. Attachments from files on this machine are not supported today: a path named by a model, read by the server and carried out by the next confirmation would be a way out for anything on your disk. [#17](https://github.com/RndmJoker/proton-mcp/issues/17) tracks a version that reads only from a directory you have set yourself, and stays off until you do. Forwarding loses nothing all the same, because the original message travels along whole, embedded images included.
 
-One thing worth knowing about drafts: Proton rewrites the thread headers of anything it stores. A reply is built with `In-Reply-To` and `References`, and what comes back has neither, only Proton's own internal thread id. Threading a stored draft is therefore Proton's business rather than this server's.
+A stored draft is sent exactly as it was stored, its files and a forwarded original included. Its markup is checked when the draft is written, not again when it is sent: once stored, the part somebody wrote and the quote below it can no longer be told apart, and checked again a formatted reply would fail on the `<style>` of its quote. Nothing is waved through unseen for that. The preview page lists every address, every hidden text and everything a newly written message could not contain, and the confirmation carries the same warning as `extended` whenever the draft holds more than `standard` would have let through. `update_draft` keeps a draft's files whatever happens to its body.
+
+One more thing worth knowing about drafts: Proton rewrites the thread headers of anything it stores. A reply is built with `In-Reply-To` and `References`, and what comes back has neither, only Proton's own internal thread id. Threading a stored draft is therefore Proton's business rather than this server's.
 
 Writes need a moment to settle. A move takes roughly fifteen seconds to reconcile with Proton, and until then the Bridge lists the message in both places, so the tools say so rather than reading back an intermediate state and calling it the result. Flags are the exception: those hold immediately.
 
@@ -301,12 +313,13 @@ Mail is text written by strangers, handed to a model that can call tools. A mess
 - **Nothing is sent without a person saying yes.** The first call never sends. It returns a question through your client naming the sender, every recipient separated into To, Cc and Bcc, and the subject. Only the second call, carrying your answer, sends.
 - **The question is short, and the message is somewhere with room.** It carries no part of the message itself; it links to a page in the local interface where you can read it as the recipient will see it, with every address in full. That split exists because the question used to grow with the message: 74 lines for a newsletter-shaped one, at which point the confirm button sat below the bottom of the dialog and nothing could be sent at all.
 - **Recipients are never summarised**, however many there are. Seeing three of eight would mean agreeing to a send to five strangers.
+- **The address you confirm is the address the message goes to.** Every recipient is read back through the code that builds the envelope, and refused if it would come out as another address or as none. An address with a character outside ASCII is refused as well: letters from another script can spell a familiar domain, and the message would go to a different one that anyone can register. A domain that really is written with such letters can be given in its `xn--` form, which is then exactly what you confirm.
 - **The answer goes through your client, never through the browser.** That page has no confirm button and will not get one: the address of the interface reaches your assistant, so a control there could be operated by the thing it is supervising.
 - **There is no setting that turns the question off.** Not an environment variable, not an argument, not a mode.
 - **A client that cannot ask cannot send.** If your client does not support form elicitation, sending is refused and you are pointed at drafts instead. That is deliberately different from the sign-in prompt, which falls back to text: the worst outcome there is an inconvenience, and here it is a message that cannot be recalled. What counts as "can ask" is the capability your client declares, read from the request when the protocol revision carries it there and from the handshake otherwise.
 - **Your yes covers one specific message.** A fingerprint of the sender, every recipient, the subject and the body is sealed with an HMAC whose key exists only in the running process, and it travels with the question. On the way back the fingerprint is recomputed from what is being asked for now. If a single address was added in between, nothing is sent. A confirmation is also bound to the tool that asked, so one cannot be reused for another.
 - **Blind copies stay blind.** They travel in the envelope and never appear in the headers the recipients see. Verified against a real delivery.
-- **The Bridge password is protected on the way out too.** SMTP is verified against the same pinned certificate as IMAP, and STARTTLS is required rather than merely attempted.
+- **The Bridge password is protected on the way out too.** IMAP and SMTP are both verified against the same pinned certificate, and on both STARTTLS is required rather than merely attempted. Something listening on the port that offers no encryption gets no password.
 
 Replying and forwarding exist as sending tools of their own, not just as drafts. The reason is measured: Proton rewrites the thread headers of anything it stores, so a reply written to a draft and sent later loses the chain, while a reply handed straight to SMTP keeps its `In-Reply-To` and stays in the conversation.
 
@@ -319,13 +332,44 @@ Only these, all under `~/.config/proton-mcp/` (on Windows `%USERPROFILE%\.config
 | File | When | What is in it |
 | :--- | :--- | :--- |
 | `known-certificate.json` | On the first connection | The Bridge's certificate and its fingerprint |
-| `settings.json` | When you change the ports in the interface | Two port numbers |
+| `settings.json` | When you change the ports or dismiss the notice in the interface | The two Bridge ports, and whether the notice that this is not an official Proton tool was dismissed |
 | `credentials.enc` | Only if you chose the encrypted file | Your Bridge password, encrypted with your master password |
-| `env` | Only if you put it there yourself | Your Bridge password in plain text |
+| `env` | Only if you chose the plain file, or put it there yourself | Your Bridge password in plain text |
+| `saved-attachments/` | While attachments are saved | Which files this server saved, so it can delete exactly those again. No content |
 
 Choosing the system keyring puts the password where the operating system keeps your other passwords, and nothing of it in a file. Choosing "this session only" writes nothing at all.
 
 **No mail, no subjects, no sender addresses, no folder names, no search terms.** The activity list in the interface records tool names and timings, in memory only, and is gone when the server stops.
+
+### Saved attachments
+
+`save_attachment` writes an attachment to your disk so that the assistant can open it, a PDF or a spreadsheet for instance. That is your mail decrypted, so it is bounded on every side:
+
+- **Off until you name a directory** in `PROTON_MCP_ATTACHMENT_DIR`, and only there or in a folder inside it. The tool is still listed, and without the directory its answer says what to set. The variable is read from the environment only; the web interface cannot set it, because an assistant can reach that page.
+- **Nothing outside it.** A folder is checked after it is resolved; `..` and a symbolic link on the way are refused.
+- **The sender's file name is reduced to a plain one**, without path separators, control or formatting characters, a leading dot or a device name Windows reserves.
+- **An existing file is never replaced**, a link in its place is never followed, and every file is readable by your account alone.
+- **Gone within the hour.** A saved file is deleted one hour after saving and when the server stops. A server that was killed leaves its files to the next one that starts. The assistant is told so, and copies a file it needs for longer.
+- **Only what it saved.** The server records which files it wrote and deletes a file only while it is still that file, so whatever else is in the directory is never touched. A folder it created for a file goes again once it is empty; a folder that was there before stays. The one gap: a folder deleted and made again under the same name can be taken for the one it created, when the file system hands out the same inode again, and then goes too if it is empty.
+- **At most 25 MB**, which is what Proton accepts per message anyway.
+
+To switch it on, add the variable to the server's entry in your client's configuration:
+
+```json
+{
+  "mcpServers": {
+    "proton": {
+      "command": "node",
+      "args": ["/absolute/path/to/proton-mcp/dist/server.js"],
+      "env": { "PROTON_MCP_ATTACHMENT_DIR": "/absolute/path/to/a/directory" }
+    }
+  }
+}
+```
+
+The directory has to exist; it is not created for you, so that a mistyped path does not become a new place for mail to land.
+
+**Do not choose a folder that is synced to a cloud service.** A file saved there leaves your machine decrypted, and the server cannot tell such a folder from any other.
 
 ### The web interface
 
@@ -348,7 +392,7 @@ The names alone say something. A folder `Banking/Revolut` reveals your bank, `Ta
 
 The Bridge generates its own certificate and keeps it inside its encrypted vault rather than on disk, so it cannot be trusted in advance. Switching verification off would mean anything that manages to listen on the port gets your Bridge password.
 
-Instead the certificate is **pinned on first use**. The first connection records its fingerprint in `~/.config/proton-mcp/known-certificate.json` and reports it on stderr. The web interface shows it too, along with the date it was recorded. Every connection after that is verified against that one certificate, which is stricter than the public trust store: a certificate signed by a recognised authority would not do.
+Instead the certificate is **pinned on first use**. The first connection records its fingerprint in `~/.config/proton-mcp/known-certificate.json` and reports it on stderr. The web interface shows it too, along with the date it was recorded. Every connection after that is verified against that one certificate, which is stricter than the public trust store: a certificate signed by a recognised authority would not do. The check happens in the connection's own handshake, before the password is sent. The certificate is read on a connection of its own only on first use and after a connection failed, to tell whether the certificate is what changed.
 
 If the certificate ever changes, the server refuses to connect and says so:
 
@@ -394,7 +438,7 @@ src/
 ├── bridge/       connection handling, certificate pinning, error translation
 ├── credentials/  the four places a password can be kept, and the runtime probe
 ├── mail/         listing, reading, searching, identifiers, attachments
-├── mime/         parsing, HTML to text, budgeting
+├── mime/         parsing, HTML to text, budgeting, the parts of a stored draft
 ├── tools/        the MCP tools and their output formatting
 ├── web/          the local interface and its security layer
 ├── activity.ts   what is running and what ran, in memory only
@@ -413,7 +457,7 @@ The CI in `.github/workflows/ci.yml` runs the tests, the type check, the build, 
 
 ```bash
 npm test
-npx tsc --noEmit
+npm run typecheck
 npm run build
 npm audit --omit=dev
 ```

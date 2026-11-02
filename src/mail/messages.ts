@@ -11,6 +11,7 @@ import type { ImapFlow } from 'imapflow'
 import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
 import { resolveMessageId, presentMessageId, ALL_MAIL, TRASH } from './ids.js'
+import { searchUids } from './uid-search.js'
 import { parseMessage, type ParsedMessage, type Address } from '../mime/parse.js'
 
 /** Upper bound for one listing. Deliberately low, callers can page. */
@@ -75,7 +76,9 @@ export interface ListResult {
   ordering: OrderingCost
 }
 
-export function toAddresses(list: Array<{ name?: string; address?: string }> | undefined): Address[] {
+export function toAddresses(
+  list: Array<{ name?: string | undefined; address?: string | undefined }> | undefined,
+): Address[] {
   if (!list) return []
   const out: Address[] = []
   for (const entry of list) {
@@ -122,6 +125,17 @@ export interface OrderEntry {
 }
 
 /**
+ * The date of an envelope, or nothing when there is none that can be used.
+ *
+ * imapflow hands out the header text itself, not a Date, when it cannot read
+ * the date, and calling getTime() on that text throws. Such a message is
+ * treated as one without a date, which puts it at the end of a listing.
+ */
+export function envelopeDate(value: Date | string | false | undefined): Date | undefined {
+  return value instanceof Date ? value : undefined
+}
+
+/**
  * Reads nothing but the date of each message.
  *
  * This is the cheapest fetch IMAP offers for the purpose: ENVELOPE and nothing
@@ -142,7 +156,38 @@ export async function fetchDates(client: ImapFlow, uids: number[]): Promise<Orde
 
   const entries: OrderEntry[] = []
   for await (const msg of client.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
-    entries.push({ uid: msg.uid, date: msg.envelope?.date })
+    entries.push({ uid: msg.uid, date: envelopeDate(msg.envelope?.date) })
+  }
+  return entries
+}
+
+/** What a search compares itself, read from the same envelope as the date. */
+export interface EnvelopeEntry extends OrderEntry {
+  /** Decoded by imapflow, unlike the raw header the Bridge searches. */
+  subject: string
+  from: Address[]
+  to: Address[]
+}
+
+/**
+ * The date of each message, and the decoded subject, sender and recipients.
+ *
+ * Costs the same as fetchDates: both read the envelope, this one keeps more of
+ * it. A search needs those fields because the Bridge compares its text against
+ * the header as stored, encoded, see searchMessages.
+ */
+export async function fetchEnvelopes(client: ImapFlow, uids: number[]): Promise<EnvelopeEntry[]> {
+  if (uids.length === 0) return []
+
+  const entries: EnvelopeEntry[] = []
+  for await (const msg of client.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
+    entries.push({
+      uid: msg.uid,
+      date: envelopeDate(msg.envelope?.date),
+      subject: msg.envelope?.subject ?? '',
+      from: toAddresses(msg.envelope?.from),
+      to: toAddresses(msg.envelope?.to),
+    })
   }
   return entries
 }
@@ -246,7 +291,7 @@ export async function fetchHeaders(client: ImapFlow, uids: number[]): Promise<Me
       subject: env?.subject ?? '',
       from: toAddresses(env?.from),
       to: toAddresses(env?.to),
-      date: env?.date,
+      date: envelopeDate(env?.date),
       size: msg.size ?? 0,
       seen: msg.flags?.has('\\Seen') ?? false,
       flagged: msg.flags?.has('\\Flagged') ?? false,
@@ -305,11 +350,12 @@ export async function listMessages(
       return { path, total: 0, offset, headers: [], ordering: nothing }
     }
 
-    const uids = await client.search(
+    const uids = await searchUids(
+      client,
       options.unreadOnly ? { seen: false } : { all: true },
-      { uid: true },
+      `the messages in "${path}"`,
     )
-    if (!uids || uids.length === 0) {
+    if (uids.length === 0) {
       return { path, total: 0, offset, headers: [], ordering: nothing }
     }
 

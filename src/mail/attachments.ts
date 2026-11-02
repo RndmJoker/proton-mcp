@@ -49,23 +49,32 @@ export interface AttachmentContent {
   unsupportedReason?: string
 }
 
+/** One attachment of a message, picked by index, with its bytes. */
+export interface PickedAttachment {
+  filename: string
+  contentType: string
+  size: number
+  content: Buffer
+}
+
 /**
- * Reads one attachment of a message by index.
+ * Picks one attachment of a message by index.
  *
  * The index refers to the list from get_message, which already excludes
- * Proton's own public key. The same filter runs here so both stay aligned.
+ * Proton's own public key. The same filter runs here so both stay aligned, and
+ * reading an attachment as text and saving it as a file pick the same one.
  */
-export async function getAttachment(
+export async function pickAttachment(
   connection: Connection,
   messageId: string,
   index: number,
-  options: { hint?: string; offset?: number } = {},
-): Promise<AttachmentContent> {
+  hint?: string,
+): Promise<PickedAttachment> {
   if (!Number.isInteger(index) || index < 0) {
     throw new BridgeError(`"${index}" is not a valid attachment index. Expected 0 or higher.`)
   }
 
-  const resolved = await resolveMessageId(connection, messageId, options.hint)
+  const resolved = await resolveMessageId(connection, messageId, hint)
 
   const source = await connection.withMailbox(resolved.path, async (client) => {
     const message = await client.fetchOne(String(resolved.uid), { source: true }, { uid: true })
@@ -94,9 +103,22 @@ export async function getAttachment(
     )
   }
 
-  const contentType = wanted.contentType ?? 'application/octet-stream'
-  const filename = wanted.filename ?? `attachment-${index}`
-  const size = wanted.size ?? wanted.content?.length ?? 0
+  return {
+    contentType: wanted.contentType ?? 'application/octet-stream',
+    filename: wanted.filename ?? `attachment-${index}`,
+    size: wanted.size ?? wanted.content?.length ?? 0,
+    content: wanted.content ?? Buffer.alloc(0),
+  }
+}
+
+/** Reads one attachment of a message by index, as text where it is text. */
+export async function getAttachment(
+  connection: Connection,
+  messageId: string,
+  index: number,
+  options: { hint?: string; offset?: number } = {},
+): Promise<AttachmentContent> {
+  const { filename, contentType, size, content } = await pickAttachment(connection, messageId, index, options.hint)
 
   if (!isTextual(contentType)) {
     return {
@@ -104,13 +126,13 @@ export async function getAttachment(
       contentType,
       size,
       unsupportedReason:
-        `This attachment is ${contentType} and cannot be returned as text. ` +
-        'Binary attachments are not supported yet, because handing them over would mean either ' +
-        'base64 in the context or writing decrypted content to disk. Open the message in a mail client instead.',
+        `This attachment is ${contentType} and cannot be returned as text, because that would mean ` +
+        'base64 in the context. save_attachment saves it as a file on this machine where the user ' +
+        'has set that up; otherwise open the message in a mail client.',
     }
   }
 
-  const raw = wanted.content?.toString('utf8') ?? ''
+  const raw = content.toString('utf8')
   const excerpt = truncate(raw, MAX_ATTACHMENT_CHARS, options.offset ?? 0)
   const result: AttachmentContent = {
     filename,

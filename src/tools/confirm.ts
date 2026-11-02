@@ -48,9 +48,10 @@ import {
   fingerprintPart,
   firstLines,
   hiddenTextOf,
+  storedBeyondOf,
   composedBody,
   showRecipient,
-  summariseQuote,
+  carriesQuote,
   styleNotesOf,
   type Draft,
 } from '../mail/compose.js'
@@ -105,12 +106,25 @@ export function digestOf(draft: Draft): string {
     // the case; now it is.
     markupLevel: draft.markupLevel ?? null,
     inReplyTo: draft.inReplyTo ?? null,
-    attached: draft.attachedMessage?.filename ?? null,
+    // Name and contents, for the same reason as the parts below. Up to 0.4.11
+    // only the name was covered.
+    attached: draft.attachedMessage
+      ? `${draft.attachedMessage.filename}:${fingerprintPart(draft.attachedMessage.raw)}`
+      : null,
+    // The body of a stored draft, which is sent unchecked, and so has to be
+    // exactly the body that was agreed to.
+    stored: draft.storedHtml ?? null,
     // The contents of every carried file, not just its name. A confirmation
     // that covered the name alone would let the picture be swapped after it
     // was agreed to.
     parts: (draft.inlineParts ?? [])
       .map((part) => `${part.contentId}:${part.contentType}:${fingerprintPart(part.content)}`)
+      .sort(),
+    carried: (draft.carriedFiles ?? [])
+      .map(
+        (file) =>
+          `${file.filename}:${file.contentType}:${file.contentId ?? ''}:${fingerprintPart(file.content)}`,
+      )
       .sort(),
   })
   return createHash('sha256').update(canonical).digest('hex')
@@ -181,18 +195,33 @@ export function describeForConfirmation(draft: Draft, what: string, previewUrl?:
   // something was demonstrably hidden. Whether a value hides anything depends
   // on where it sits, and a warning clever enough to judge that is a warning
   // that will be wrong once, in the direction nobody wants.
+  //
+  // A stored draft is sent as it was stored, without the check composed markup
+  // goes through, so it gets the same warning whenever it carries more than
+  // `standard` would have let through.
   const notes = styleNotesOf(draft)
-  if (notes.length > 0) {
+  const beyond = storedBeyondOf(draft)
+  if (notes.length > 0 || beyond.length > 0) {
     const hiding = notes.filter((n) => n.hides)
+    lines.push('', '!!! THIS MESSAGE USES MARKUP THAT CAN HIDE CONTENT !!!', '')
+    if (notes.length > 0) {
+      lines.push(
+        hiding.length > 0
+          ? `${notes.length} unusual propert(ies) were used, and ${hiding.length} of them put ` +
+            'something out of sight. What a recipient sees is not what this message says it is.'
+          : `${notes.length} unusual propert(ies) were used. None of them hides anything by ` +
+            'itself, but they are the ones that can.',
+      )
+    }
+    if (beyond.length > 0) {
+      lines.push(
+        // A count, not a list: a quoted newsletter repeats such things dozens of
+        // times, and a list here is how the question once outgrew its dialog.
+        `The stored draft carries ${beyond.length} thing(s) a message written here may not ` +
+          'contain, listed on the preview page. It is sent as it was stored, without that check.',
+      )
+    }
     lines.push(
-      '',
-      '!!! THIS MESSAGE USES MARKUP THAT CAN HIDE CONTENT !!!',
-      '',
-      hiding.length > 0
-        ? `${notes.length} unusual propert(ies) were used, and ${hiding.length} of them put ` +
-          'something out of sight. What a recipient sees is not what this message says it is.'
-        : `${notes.length} unusual propert(ies) were used. None of them hides anything by ` +
-          'itself, but they are the ones that can.',
       'Open the preview and look before answering. It names every one, its value and where it sat.',
     )
   }
@@ -228,13 +257,15 @@ function countsFor(draft: Draft): string | undefined {
   const urls = describeUrls(draft)
   const hidden = hiddenTextOf(draft)
   const files = describeAttachments(draft)
-  const quoted = summariseQuote(draft)
 
   const parts: string[] = []
   if (urls.length) parts.push(`${urls.length} address(es)`)
   if (hidden.length) parts.push(`${hidden.length} piece(s) of text the body does not show`)
-  if (files.length) parts.push(`${files.length} carried file(s)`)
-  if (quoted) parts.push('a quoted message')
+  // "file(s)", not "carried file(s)": the line already begins "It carries".
+  if (files.length) parts.push(`${files.length} file(s)`)
+  // Seen in the body as well as apart from it, so a stored draft and a plain
+  // text reply say so too, see carriesQuote.
+  if (carriesQuote(draft)) parts.push('a quoted message')
 
   if (!parts.length) return undefined
   const list =

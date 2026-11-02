@@ -1,6 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { createDraft, updateDraft, replyDraft, forwardDraft, DRAFTS } from '../../src/mail/drafts.js'
+import MailComposer from 'nodemailer/lib/mail-composer/index.js'
+import {
+  createDraft,
+  updateDraft,
+  replyDraft,
+  forwardDraft,
+  buildForwardDraft,
+  readDraftForSending,
+  DRAFTS,
+} from '../../src/mail/drafts.js'
 import { BridgeError } from '../../src/bridge/errors.js'
+import { buildMessage, type Draft } from '../../src/mail/compose.js'
+import { readParts } from '../../src/mime/parts.js'
 import type { Connection, MailboxStatus } from '../../src/bridge/connection.js'
 
 /**
@@ -40,6 +51,12 @@ const SOURCE = [
   '',
   'The actual text of the message.',
 ].join('\r\n')
+
+/** The same message, addressed to a domain spelt in Cyrillic that reads as apple.com. */
+const LOOKALIKE = SOURCE.replace(
+  'To: me@example.com, other@example.com',
+  'To: me@example.com, ceo@\u0430\u0440\u0440\u04cf\u0435.com',
+)
 
 function fakeConnection(options: FakeOptions = {}) {
   const recorded: Recorded = { appends: [], deletes: [], opened: [] }
@@ -200,6 +217,33 @@ describe('updateDraft', () => {
     expect(recorded.deletes).toEqual([])
     expect(recorded.opened).toEqual([])
   })
+
+  it('holds a recipient carried over from the stored draft to the same rule', async () => {
+    // Carried over, a recipient never passes through parseRecipient.
+    const { connection, recorded } = fakeConnection({ source: LOOKALIKE })
+    await expect(
+      updateDraft(connection, false, ME, '<original@example.com>', { subject: 'Changed' }),
+    ).rejects.toThrow(BridgeError)
+    expect(recorded.appends).toEqual([])
+    expect(recorded.deletes).toEqual([])
+  })
+})
+
+describe('readDraftForSending', () => {
+  it('reads a stored draft back with its recipients', async () => {
+    const { connection } = fakeConnection()
+    const draft = await readDraftForSending(connection, ME, '<original@example.com>')
+    expect(draft.to.map((r) => r.address)).toEqual(['me@example.com', 'other@example.com'])
+  })
+
+  it('refuses a stored recipient that would read differently once sent', async () => {
+    // A draft can be written anywhere, in Proton itself included. Its
+    // recipients reach the confirmation without being typed by anyone here.
+    const { connection } = fakeConnection({ source: LOOKALIKE })
+    await expect(readDraftForSending(connection, ME, '<original@example.com>')).rejects.toThrow(
+      BridgeError,
+    )
+  })
 })
 
 describe('replyDraft', () => {
@@ -275,6 +319,45 @@ describe('forwardDraft', () => {
     const written = recorded.appends[0]?.raw ?? ''
     expect(written).toContain('Forwarded message')
     expect(written).toContain('For your information')
+  })
+
+  it('parts the head of the forward from the original with a blank line', async () => {
+    // In plain text the last line of the head ran into the original's first,
+    // read back from the Bridge on 2026-11-02.
+    const { connection } = fakeConnection()
+    const draft = await buildForwardDraft(
+      connection,
+      ME,
+      '<original@example.com>',
+      ['third@example.com'],
+      'For your information',
+    )
+    expect(draft.text).toContain('To: me@example.com, other@example.com\n\nThe actual text of the message.')
+  })
+
+  it('names the attached original after its subject and lists what travels inside it', async () => {
+    // Built with the real nodemailer, so the attachment names arrive encoded
+    // the way a mail client sends them.
+    const source = await new MailComposer({
+      from: 'Jane Doe <jane@example.com>',
+      to: ME,
+      subject: 'Bericht \u00fcber Br\u00fccken',
+      messageId: '<original@example.com>',
+      date: new Date('2026-07-31T09:00:00Z'),
+      text: 'See the files.',
+      attachments: [
+        { filename: 'daten.json', content: '{}', contentType: 'application/json' },
+        { filename: 'notiz-\u00fcber-br\u00fccken.txt', content: 'x', contentType: 'text/plain' },
+      ],
+    })
+      .compile()
+      .build()
+    const { connection } = fakeConnection({ source: source.toString('utf8') })
+    const draft = await forwardDraft(connection, false, ME, '<original@example.com>', ['third@example.com'], '')
+    expect(draft.attachedOriginal).toEqual({
+      filename: 'Bericht \u00fcber Br\u00fccken.eml',
+      carries: ['daten.json', 'notiz-\u00fcber-br\u00fccken.txt'],
+    })
   })
 
   it('does not carry the thread headers of the original', async () => {
@@ -423,5 +506,116 @@ describe('this module cannot send', () => {
     // Nothing here reaches for SMTP, and nothing writes outside Drafts.
     expect(recorded.appends.every((a) => a.mailbox === DRAFTS)).toBe(true)
     expect(recorded.deletes.every((d) => d.mailbox === DRAFTS)).toBe(true)
+  })
+})
+
+describe('a stored draft keeps what it carries', () => {
+  // Each case went wrong up to 0.4.11: a stored draft was read back through
+  // mailparser and rebuilt from its text and markup alone. The stored drafts
+  // here are built the way this server stores them, with the real nodemailer.
+  const FORWARDED = Buffer.from(
+    [
+      'From: jane@example.com',
+      'To: me@example.com',
+      'Subject: Report',
+      'Message-ID: <report@example.com>',
+      '',
+      'The report itself.',
+      '',
+    ].join('\r\n'),
+  )
+  const BUTTON = '<p><a href="https://example.com" style="display: inline-block; padding: 12px">Go</a></p>'
+  const QUOTE = '<style>p { color: red }</style><blockquote><p>Their words</p></blockquote>'
+
+  async function stored(over: Partial<Draft>): Promise<string> {
+    const raw = await buildMessage(
+      {
+        from: { address: ME },
+        to: [{ address: 'you@example.com' }],
+        cc: [],
+        bcc: [],
+        subject: 'Stored',
+        text: 'Body',
+        messageId: '<stored@example.com>',
+        ...over,
+      },
+      { keepBcc: true },
+    )
+    return raw.toString('utf8')
+  }
+
+  it('sends a forward with the message it forwards', async () => {
+    const source = await stored({ text: 'See below.', attachedMessage: { filename: 'Report.eml', raw: FORWARDED } })
+    const { connection } = fakeConnection({ source })
+    const draft = await readDraftForSending(connection, ME, '<stored@example.com>')
+
+    const sent = await readParts(await buildMessage(draft))
+    expect(sent.files.map((f) => f.contentType)).toEqual(['message/rfc822'])
+    expect(sent.files[0]?.content.equals(FORWARDED)).toBe(true)
+    // And the original did not slip into the body on the way.
+    expect(sent.text).not.toContain('The report itself')
+  })
+
+  it('keeps the forwarded message when only the subject changes', async () => {
+    const source = await stored({ text: 'See below.', attachedMessage: { filename: 'Report.eml', raw: FORWARDED } })
+    const { connection, recorded } = fakeConnection({ source })
+    await updateDraft(connection, false, ME, '<stored@example.com>', { subject: 'Renamed' })
+
+    const written = await readParts(Buffer.from(recorded.appends[0]?.raw ?? ''))
+    expect(written.files[0]?.content.equals(FORWARDED)).toBe(true)
+  })
+
+  it('keeps a stored file when the text is replaced', async () => {
+    const notes = { filename: 'notes.txt', contentType: 'text/plain', content: Buffer.from('some notes') }
+    const source = await stored({ text: 'Old text', carriedFiles: [notes] })
+    const { connection, recorded } = fakeConnection({ source })
+    const result = await updateDraft(connection, false, ME, '<stored@example.com>', { text: 'New text' })
+
+    const written = await readParts(Buffer.from(recorded.appends[0]?.raw ?? ''))
+    expect(written.text?.trim()).toBe('New text')
+    expect(written.files).toEqual([notes])
+    expect(result.keptFiles).toEqual(['notes.txt'])
+  })
+
+  it('sends a formatted reply with the quote it was stored with', async () => {
+    // The quote carries a <style>, as two thirds of formatted mail does. Checked
+    // again as if the writer had composed it, the reply could never be sent.
+    const source = await stored({ html: '<p>My answer</p>', quotedHtml: QUOTE })
+    const { connection } = fakeConnection({ source })
+    const draft = await readDraftForSending(connection, ME, '<stored@example.com>')
+
+    const sent = await readParts(await buildMessage(draft))
+    expect(sent.html).toContain('My answer')
+    expect(sent.html).toContain('Their words')
+  })
+
+  it('keeps a formatted reply as it was when only the subject changes', async () => {
+    const source = await stored({ html: '<p>My answer</p>', quotedHtml: QUOTE })
+    const { connection, recorded } = fakeConnection({ source })
+    await updateDraft(connection, false, ME, '<stored@example.com>', { subject: 'Renamed' })
+
+    const written = await readParts(Buffer.from(recorded.appends[0]?.raw ?? ''))
+    expect(written.html).toContain('<style>')
+    expect(written.html).toContain('Their words')
+  })
+
+  it('sends a draft written at extended without the level being stated again', async () => {
+    const source = await stored({ html: BUTTON, markupLevel: 'extended' })
+    const { connection } = fakeConnection({ source })
+    const draft = await readDraftForSending(connection, ME, '<stored@example.com>')
+
+    expect((await buildMessage(draft)).toString('utf8')).toContain('inline-block')
+  })
+
+  it('sends the file of a draft written in Proton itself', async () => {
+    // Proton keeps a draft's attachments as ordinary parts, which nothing here
+    // built. They are carried as they are.
+    const report = { filename: 'report.pdf', contentType: 'application/pdf', content: Buffer.from('%PDF-1.7 x') }
+    const source = await stored({ text: 'Attached.', carriedFiles: [report] })
+    const { connection } = fakeConnection({ source })
+    const draft = await readDraftForSending(connection, ME, '<stored@example.com>')
+
+    const sent = await readParts(await buildMessage(draft))
+    expect(sent.files).toEqual([report])
   })
 })

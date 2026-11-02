@@ -35,6 +35,8 @@ import { registerLabelTools } from './tools/labels.js'
 import { registerActionTools } from './tools/actions.js'
 import { registerDraftTools } from './tools/drafts.js'
 import { registerSendTools } from './tools/send.js'
+import { registerSavedAttachmentTools } from './tools/saved.js'
+import { SavedAttachments } from './mail/saved-attachments.js'
 import type { PendingSend } from './tools/confirm.js'
 import { setSignInHint, setLockedCheck } from './tools/failures.js'
 import { pendingView } from './tools/pending-view.js'
@@ -103,6 +105,14 @@ async function main(): Promise<void> {
   // anything, and a locked Bridge should not prevent it from starting.
   const connection = new Connection(config, () => session.credentials(), notify)
 
+  // Attachments saved to disk, one store for the whole process. Starting it
+  // clears up what a server that was killed left behind; stopping it, below,
+  // deletes what this one saved. The exit handler is the fallback for an exit
+  // that does not pass through shutdown.
+  const saved = new SavedAttachments({ root: config.attachmentDir })
+  saved.start()
+  process.on('exit', () => saved.stop())
+
   /**
    * Tries credentials against the Bridge before they are trusted.
    *
@@ -127,18 +137,30 @@ async function main(): Promise<void> {
     onSignIn: async (credentials, storeKind, masterPassword) => {
       const failure = await verify(credentials)
       if (failure) return failure
+      let left: string[]
       try {
-        await session.signIn(credentials, storeKind, masterPassword)
+        left = await session.signIn(credentials, storeKind, masterPassword)
       } catch (error) {
         return (error as Error).message
       }
       // Drop the old connection so the next call uses the new credentials.
       await connection.close()
-      return undefined
+      if (left.length === 0) return undefined
+      return {
+        warning:
+          `Signed in, and the password is kept where you chose. An earlier one is still stored ` +
+          `elsewhere, though. ${left.join(' ')} Until it is gone, the next start may sign in ` +
+          'with it instead.',
+      }
     },
     onSignOut: async () => {
-      await session.signOut()
+      const left = await session.signOut()
       await connection.close()
+      if (left.length === 0) return undefined
+      return (
+        `Signed out here, but not everywhere. ${left.join(' ')} Until that is done, the next start ` +
+        'signs in with what is left.'
+      )
     },
     onUnlock: async (masterPassword) => {
       let credentials
@@ -152,18 +174,24 @@ async function main(): Promise<void> {
       // the user would rather have answered here than at the next tool call.
       const failure = await verify(credentials)
       if (failure) {
-        await session.signOut()
+        const left = await session.signOut()
         return (
           `${failure}\n\nThe file was decrypted, so the master password was correct, but the ` +
-          'Bridge password inside it no longer works. Sign in again with a fresh one.'
+          'Bridge password inside it no longer works. Sign in again with a fresh one.' +
+          (left.length ? `\n\nNot everything stored could be removed. ${left.join(' ')}` : '')
         )
       }
       await connection.close()
       return undefined
     },
     onDiscardEncrypted: async () => {
-      await session.discardEncrypted()
+      try {
+        await session.discardEncrypted()
+      } catch (error) {
+        return (error as Error).message
+      }
       notify('the encrypted credentials file was deleted on request')
+      return undefined
     },
     getStatus: async () => {
       const pinned = loadPinned(pinPath())
@@ -343,6 +371,7 @@ async function main(): Promise<void> {
     registerUpdateTool(server, VERSION)
     registerListFolders(server, connection)
     registerMessageTools(server, connection)
+    registerSavedAttachmentTools(server, connection, saved)
     // Read as a function rather than a value: whether the server may write is a
     // property of the configuration, and the tools should ask at call time.
     registerLabelTools(server, connection, () => config.readOnly)
@@ -395,6 +424,7 @@ async function main(): Promise<void> {
     if (!idle) notify('shutdown forced, a call was still running.')
 
     try {
+      saved.stop()
       await web.stop()
       await connection.close()
       await handle.close()

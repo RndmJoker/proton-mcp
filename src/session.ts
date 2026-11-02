@@ -180,8 +180,9 @@ export class Session {
    * that matters.
    */
   async discardEncrypted(): Promise<void> {
-    await this.#stores['encrypted-file'].clear()
+    // Forgotten first: whether or not the file goes, nobody can use it now.
     this.#masterPassword = undefined
+    await this.#stores['encrypted-file'].clear()
   }
 
   /**
@@ -189,13 +190,18 @@ export class Session {
    *
    * The caller has already verified them against the Bridge: storing something
    * that does not work would be worse than not storing it.
+   *
+   * Every other store is emptied afterwards, so that only the place chosen last
+   * holds credentials. Before 2026-11-02 they were left as they were, and on the
+   * next start an earlier sign-in into another store won over this one (#53).
+   * Returns what could not be emptied; the sign-in stands either way.
    */
   async signIn(
     credentials: Credentials,
     storeKind: StoreKind,
     /** Required for the encrypted file, meaningless for every other store. */
     masterPassword?: string,
-  ): Promise<void> {
+  ): Promise<string[]> {
     if (storeKind === 'encrypted-file') {
       if (!masterPassword) {
         throw new BridgeError(
@@ -217,23 +223,43 @@ export class Session {
     this.#credentials = credentials
     this.#storeKind = storeKind
     this.#restored = true
+    // The encrypted file is about to go if it was not the choice, and with it
+    // the only use of its master password.
+    if (storeKind !== 'encrypted-file') this.#masterPassword = undefined
+    return this.#clearAll(storeKind)
   }
 
-  /** Forgets the credentials everywhere they might be. */
-  async signOut(): Promise<void> {
+  /**
+   * Forgets the credentials everywhere they might be.
+   *
+   * Returns what could not be removed, one explanation per store, and nothing
+   * when every store is empty. This process forgets them either way, because
+   * signing out is what the user asked for. Until 2026-11-02 a failure here was
+   * swallowed and looked like a clean sign-out (#52).
+   */
+  async signOut(): Promise<string[]> {
     // Every store, not only the one in use: a user signing out means "remove it",
     // and a leftover in another store would silently sign them back in.
-    for (const kind of Object.keys(this.#stores) as StoreKind[]) {
-      try {
-        await this.#stores[kind].clear()
-      } catch {
-        // Nothing there is the outcome we wanted anyway.
-      }
-    }
+    const left = await this.#clearAll()
     this.#credentials = undefined
     this.#storeKind = undefined
     this.#masterPassword = undefined
     this.#restored = true
+    return left
+  }
+
+  /** Empties every store but the one named, and says which could not be emptied. */
+  async #clearAll(except?: StoreKind): Promise<string[]> {
+    const left: string[] = []
+    for (const kind of Object.keys(this.#stores) as StoreKind[]) {
+      if (kind === except) continue
+      try {
+        await this.#stores[kind].clear()
+      } catch (error) {
+        left.push((error as Error).message)
+      }
+    }
+    return left
   }
 
   /** Replaces a store. Used by tests and by the startup wiring. */

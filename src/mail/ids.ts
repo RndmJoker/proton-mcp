@@ -13,6 +13,7 @@
 import type { ImapFlow } from 'imapflow'
 import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
+import { searchUids } from './uid-search.js'
 
 /** Mailbox that holds every message, including trash. The fallback for lookups. */
 export const ALL_MAIL = 'All Mail'
@@ -126,16 +127,17 @@ export async function findByMessageId(
   client: ImapFlow,
   messageId: string,
 ): Promise<number | undefined> {
-  const exact = await client.search({ header: { 'message-id': messageId } }, { uid: true })
-  if (exact && exact.length > 0) {
+  const what = `the message ${messageId}`
+  const exact = await searchUids(client, { header: { 'message-id': messageId } }, what)
+  if (exact.length > 0) {
     // Several hits mean duplicates of the same message inside one mailbox.
     // The highest UID is the most recent copy.
     return Math.max(...exact)
   }
 
   const bare = bareForm(messageId)
-  const loose = await client.search({ header: { 'message-id': bare } }, { uid: true })
-  if (!loose || loose.length === 0) return undefined
+  const loose = await searchUids(client, { header: { 'message-id': bare } }, what)
+  if (loose.length === 0) return undefined
 
   // Newest first, so a duplicate resolves to the more recent copy like above.
   for (const uid of [...loose].sort((a, b) => b - a)) {

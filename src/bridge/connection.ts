@@ -10,7 +10,7 @@
 import { ImapFlow, type ListResponse, type MailboxLockObject } from 'imapflow'
 import type { Config, BridgeCredentials } from '../config.js'
 import { explainError, BridgeError } from './errors.js'
-import { ensurePinned } from './certificate.js'
+import { certificateChanged, pinFor } from './certificate.js'
 
 /** Thrown when a tool is used before anyone has signed in. */
 export class NotSignedInError extends BridgeError {
@@ -124,15 +124,24 @@ export class Connection {
       )
     }
 
-    // Pin the certificate before handing over any credentials. On first use this
-    // records what it finds, afterwards it verifies. A changed certificate stops
-    // us here rather than after the password has gone out.
-    const pinned = await ensurePinned(this.config.host, this.config.imapPort, {
+    // The certificate to verify against. On first use this reads and records
+    // it, and that read is the first thing to reach the Bridge, so a Bridge
+    // that is not running shows up here as a bare socket error. Measured before
+    // it was translated: "Unexpected error while listing mailboxes: Error:
+    // connect ECONNREFUSED", where the explanation below was meant to be.
+    //
+    // Once one is pinned, nothing is read here: the handshake below verifies
+    // against the pin and fails before the password goes out, see pinFor.
+    const pinned = await pinFor(this.config.host, this.config.imapPort, {
       onFirstUse: (entry) =>
         this.notify(
           `recorded the Bridge certificate on first use, fingerprint ${entry.fingerprint256}. ` +
             'Further connections are verified against it.',
         ),
+    }).catch((error: unknown) => {
+      throw error instanceof BridgeError
+        ? error
+        : explainError(error, this.config.host, this.config.imapPort)
     })
 
     const client = new ImapFlow({
@@ -141,6 +150,13 @@ export class Connection {
       // The Bridge expects a plaintext connection upgraded via STARTTLS,
       // not a direct TLS handshake.
       secure: false,
+      // Required, not "if offered". Left to its default, imapflow logs in over
+      // the unencrypted connection when the greeting does not offer STARTTLS,
+      // and with logging off nobody would see the warning. Up to 0.4.11 the
+      // certificate probe in front of every connection happened to prevent
+      // that; since the probe runs only on first use, this is what does. The
+      // same as requireTLS on the SMTP side.
+      doSTARTTLS: true,
       auth: { user: credentials.user, pass: credentials.pass },
       tls: {
         // Verified against exactly one certificate: the pinned one. This is
@@ -169,7 +185,10 @@ export class Connection {
     try {
       await client.connect()
     } catch (error) {
-      throw explainError(error, this.config.host, this.config.imapPort)
+      // A certificate other than the pinned one fails the handshake, and from
+      // here that looks like any other failure. Only now is a probe worth it.
+      const changed = await certificateChanged(this.config.host, this.config.imapPort, pinned)
+      throw changed ?? explainError(error, this.config.host, this.config.imapPort)
     }
 
     this.#client = client
@@ -232,6 +251,14 @@ export class Connection {
     const st = await this.#withRetry((client) =>
       client.status(path, { messages: true, unseen: true, uidValidity: true, uidNext: true }),
     )
+    // imapflow answers a STATUS it could not complete with false rather than
+    // an error. Read as zero messages, the mailbox would look empty.
+    if (!st) {
+      throw new BridgeError(
+        `The Bridge did not report the state of "${path}", so it cannot be said how many messages ` +
+          'it holds. Try again, and if it fails again, check that the Bridge is running and unlocked.',
+      )
+    }
     return {
       path,
       messages: st.messages ?? 0,
