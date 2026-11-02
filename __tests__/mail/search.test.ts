@@ -380,4 +380,23 @@ describe('formatSearch', () => {
   it('says nothing of full text where none was searched', () => {
     expect(formatSearch({ ...empty, fullText: false })).not.toMatch(/base64/)
   })
+
+  it('counts one match as one, and more as matches', () => {
+    // Read "1 matches in" back from the Bridge on 2026-11-02.
+    const one = {
+      messageId: '<one@example.com>',
+      subject: 'A subject',
+      from: [{ address: 'alice@example.com' }],
+      to: [{ address: 'bob@example.com' }],
+      date: new Date('2026-07-29T18:25:00Z'),
+      size: 3083,
+      seen: true,
+      flagged: false,
+      answered: false,
+      draft: false,
+      hasAttachments: false,
+    }
+    expect(formatSearch({ ...empty, fullText: false, total: 1, headers: [one] })).toMatch(/^1 match in "INBOX", showing 1 to 1,/)
+    expect(formatSearch({ ...empty, fullText: false, total: 2, headers: [one, one] })).toMatch(/^2 matches in "INBOX"/)
+  })
 })

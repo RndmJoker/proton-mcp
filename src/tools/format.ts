@@ -292,7 +292,7 @@ export function formatSearch(result: SearchResult): string {
 
   const last = result.offset + result.headers.length
   const head = [
-    `${result.total} matches in "${result.path}", showing ${result.offset + 1} to ${last}, ` +
+    `${result.total} ${result.total === 1 ? 'match' : 'matches'} in "${result.path}", showing ${result.offset + 1} to ${last}, ` +
       `newest first (search took ${result.elapsedMs} ms).`,
     ...notes,
   ].join('\n')
