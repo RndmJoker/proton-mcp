@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -279,9 +280,13 @@ describe('the folders it creates', () => {
   it('leaves a folder that was replaced by another of the same name', () => {
     const s = store()
     const saved = s.save('a.pdf', CONTENT, 'application/pdf', 'swapped')
+    // Made while the first still exists, so it cannot have its inode. A folder
+    // made after deleting the first got that same inode back on the CI's
+    // file system on 2026-11-02, and could then not be told apart.
+    mkdirSync(join(root, 'replacement'))
     rmSync(saved.path)
     rmSync(join(root, 'swapped'), { recursive: true })
-    mkdirSync(join(root, 'swapped'))
+    renameSync(join(root, 'replacement'), join(root, 'swapped'))
     expect(s.delete().folders).toEqual([])
     expect(existsSync(join(root, 'swapped'))).toBe(true)
   })

@@ -182,6 +182,13 @@ function deleteIfSame(entry: SavedEntry): 'deleted' | 'left' | 'missing' {
  * standing. And only while it is still the folder that was created, the same
  * inode, never a link in its place. Returns what went and what is left to
  * watch; a folder that is gone or no longer ours is neither.
+ *
+ * The limit of that: a folder deleted and made again under the same name can
+ * get the same inode back, as it did on the CI's file system on 2026-11-02,
+ * and is then taken for the one created here. rmdir removes it only if it is
+ * empty. The time a folder was made would tell them apart, but where the file
+ * system does not keep it, Node reports the ctime instead, which changes as
+ * soon as a file inside goes, and no folder would ever be removed.
  */
 function pruneFolders(folders: readonly CreatedFolder[]): { removed: string[]; kept: CreatedFolder[] } {
   const removed: string[] = []

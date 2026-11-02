@@ -350,7 +350,7 @@ Choosing the system keyring puts the password where the operating system keeps y
 - **The sender's file name is reduced to a plain one**, without path separators, control or formatting characters, a leading dot or a device name Windows reserves.
 - **An existing file is never replaced**, a link in its place is never followed, and every file is readable by your account alone.
 - **Gone within the hour.** A saved file is deleted one hour after saving and when the server stops. A server that was killed leaves its files to the next one that starts. The assistant is told so, and copies a file it needs for longer.
-- **Only what it saved.** The server records which files it wrote and deletes a file only while it is still that file, so whatever else is in the directory is never touched. A folder it created for a file goes again once it is empty; a folder that was there before stays.
+- **Only what it saved.** The server records which files it wrote and deletes a file only while it is still that file, so whatever else is in the directory is never touched. A folder it created for a file goes again once it is empty; a folder that was there before stays. The one gap: a folder deleted and made again under the same name can be taken for the one it created, when the file system hands out the same inode again, and then goes too if it is empty.
 - **At most 25 MB**, which is what Proton accepts per message anyway.
 
 To switch it on, add the variable to the server's entry in your client's configuration:
