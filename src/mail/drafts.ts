@@ -561,6 +561,9 @@ export async function buildForwardDraft(
     `Date: ${original.date ? original.date.toISOString().slice(0, 16).replace('T', ' ') : 'unknown'}`,
     `Subject: ${original.subject || '(no subject)'}`,
     `To: ${original.to.map((t) => t.address).join(', ') || '(none)'}`,
+    // Two, so that a blank line parts the head from the original's first line.
+    // With one the two ran together, seen on 2026-11-02.
+    '',
     '',
   ].join('\n')
 

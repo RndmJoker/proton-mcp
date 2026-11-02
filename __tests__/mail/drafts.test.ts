@@ -5,6 +5,7 @@ import {
   updateDraft,
   replyDraft,
   forwardDraft,
+  buildForwardDraft,
   readDraftForSending,
   DRAFTS,
 } from '../../src/mail/drafts.js'
@@ -318,6 +319,20 @@ describe('forwardDraft', () => {
     const written = recorded.appends[0]?.raw ?? ''
     expect(written).toContain('Forwarded message')
     expect(written).toContain('For your information')
+  })
+
+  it('parts the head of the forward from the original with a blank line', async () => {
+    // In plain text the last line of the head ran into the original's first,
+    // read back from the Bridge on 2026-11-02.
+    const { connection } = fakeConnection()
+    const draft = await buildForwardDraft(
+      connection,
+      ME,
+      '<original@example.com>',
+      ['third@example.com'],
+      'For your information',
+    )
+    expect(draft.text).toContain('To: me@example.com, other@example.com\n\nThe actual text of the message.')
   })
 
   it('names the attached original after its subject and lists what travels inside it', async () => {
