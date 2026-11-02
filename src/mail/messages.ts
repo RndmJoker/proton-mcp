@@ -161,6 +161,37 @@ export async function fetchDates(client: ImapFlow, uids: number[]): Promise<Orde
   return entries
 }
 
+/** What a search compares itself, read from the same envelope as the date. */
+export interface EnvelopeEntry extends OrderEntry {
+  /** Decoded by imapflow, unlike the raw header the Bridge searches. */
+  subject: string
+  from: Address[]
+  to: Address[]
+}
+
+/**
+ * The date of each message, and the decoded subject, sender and recipients.
+ *
+ * Costs the same as fetchDates: both read the envelope, this one keeps more of
+ * it. A search needs those fields because the Bridge compares its text against
+ * the header as stored, encoded, see searchMessages.
+ */
+export async function fetchEnvelopes(client: ImapFlow, uids: number[]): Promise<EnvelopeEntry[]> {
+  if (uids.length === 0) return []
+
+  const entries: EnvelopeEntry[] = []
+  for await (const msg of client.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
+    entries.push({
+      uid: msg.uid,
+      date: envelopeDate(msg.envelope?.date),
+      subject: msg.envelope?.subject ?? '',
+      from: toAddresses(msg.envelope?.from),
+      to: toAddresses(msg.envelope?.to),
+    })
+  }
+  return entries
+}
+
 /**
  * Puts messages newest first and returns their UIDs in that order.
  *

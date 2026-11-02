@@ -256,20 +256,46 @@ export function formatMessage(m: ParsedMessage & { path: string }): string {
  * Reports the elapsed time, so a caller can tell a cheap criterion from an
  * expensive one instead of guessing why an answer took seconds.
  */
-export function formatSearch(result: SearchResult): string {
-  if (result.total === 0) {
-    return (
-      `No matches in "${result.path}" (search took ${result.elapsedMs} ms).` +
-      (result.fullText
-        ? ' Note that full-text search only covers the message body and headers, not attachment contents.'
-        : '')
+/**
+ * What a search could not cover, said in every answer it applies to.
+ *
+ * A search that found nothing reads the same whether nothing is there or the
+ * search could not look, and an assistant reports either as "not there". So the
+ * limits are said, not left for anyone to guess.
+ */
+export function searchNotes(result: SearchResult): string[] {
+  const notes: string[] = []
+  if (result.compared) {
+    notes.push(
+      `Only the ${result.compared.compared} most recently added of ${result.compared.of} messages ` +
+        'were compared by subject, sender or recipient. Give since or before to reach older ones.',
     )
+  }
+  if (result.fullText) {
+    notes.push(
+      'Full text is compared with each message as the Bridge stores it: attachments and parts sent ' +
+        'as base64 are not searched, so a missing match does not prove that a word is absent.' +
+        (result.encodedForms
+          ? ' Words with letters outside ASCII were also looked for in their quoted-printable form.'
+          : ''),
+    )
+  }
+  return notes
+}
+
+export function formatSearch(result: SearchResult): string {
+  const notes = searchNotes(result)
+
+  if (result.total === 0) {
+    return [`No matches in "${result.path}" (search took ${result.elapsedMs} ms).`, ...notes].join('\n')
   }
 
   const last = result.offset + result.headers.length
-  const head =
+  const head = [
     `${result.total} matches in "${result.path}", showing ${result.offset + 1} to ${last}, ` +
-    `newest first (search took ${result.elapsedMs} ms).`
+      `newest first (search took ${result.elapsedMs} ms).`,
+    ...notes,
+  ].join('\n')
 
   const body = formatList({
     path: result.path,
