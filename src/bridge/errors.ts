@@ -35,8 +35,34 @@ export class BridgeError extends Error {
 
 interface ErrorWithCode {
   code?: string
+  /**
+   * The code of the system error, where a library put its own in `code`.
+   * nodemailer files a refused connection as ESOCKET and keeps ECONNREFUSED
+   * here.
+   */
+  originalCode?: string
   responseText?: string
   message?: string
+}
+
+/** The codes that mean the connection itself did not come about. */
+const CONNECTION_CODES = new Set(['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN'])
+
+/** The system code of an error, also where a library relabelled it. */
+function systemCode(e: ErrorWithCode | undefined): string | undefined {
+  return e?.originalCode ?? e?.code
+}
+
+/**
+ * Whether the connection itself failed, rather than something said over it.
+ *
+ * Sending learns this only from nodemailer, which relabels the system error,
+ * and since the certificate is no longer fetched before every send, a send is
+ * where a Bridge that is not running shows up first.
+ */
+export function isConnectionFailure(error: unknown): boolean {
+  const code = systemCode(error as ErrorWithCode)
+  return code !== undefined && CONNECTION_CODES.has(code)
 }
 
 /**
@@ -48,8 +74,9 @@ interface ErrorWithCode {
 export function explainError(error: unknown, host: string, port: number): BridgeError {
   const e = error as ErrorWithCode
   const address = `${host}:${port}`
+  const code = systemCode(e)
 
-  if (e?.code === 'ECONNREFUSED') {
+  if (code === 'ECONNREFUSED') {
     return new BridgeError(
       `Nothing is accepting connections on ${address}. Proton Mail Bridge is most likely not ` +
         'running: it is a desktop application that has to be started and unlocked by the person ' +
@@ -60,7 +87,7 @@ export function explainError(error: unknown, host: string, port: number): Bridge
     )
   }
 
-  if (e?.code === 'ETIMEDOUT' || e?.code === 'ECONNRESET') {
+  if (code === 'ETIMEDOUT' || code === 'ECONNRESET') {
     return new BridgeError(
       `The connection to ${address} did not come up, or it was dropped. That happens while the ` +
         'Bridge is starting up and while it is locked, both of which pass on their own once the ' +
@@ -70,7 +97,7 @@ export function explainError(error: unknown, host: string, port: number): Bridge
     )
   }
 
-  if (e?.code === 'ENOTFOUND' || e?.code === 'EAI_AGAIN') {
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
     return new BridgeError(
       `The address "${host}" could not be resolved. Unless the Bridge was deliberately put on ` +
         'another machine, BRIDGE_HOST should be 127.0.0.1.',
@@ -97,6 +124,18 @@ export function explainError(error: unknown, host: string, port: number): Bridge
     return new BridgeError(
       'The Bridge certificate was rejected. The Bridge uses a self-signed certificate, ' +
         'which is only accepted for connections to 127.0.0.1.',
+      'none',
+      { cause: error },
+    )
+  }
+
+  // imapflow marks a STARTTLS that was required and did not happen. The Bridge
+  // always offers it, so the likelier story is something else on the port.
+  if ((error as { tlsFailed?: unknown })?.tlsFailed === true || /STARTTLS/.test(text)) {
+    return new BridgeError(
+      `Whatever answered on ${address} did not offer an encrypted connection, so the password was ` +
+        'not sent. Proton Mail Bridge always offers one. If the Bridge is running, check that this ' +
+        'is its port; otherwise another program may be listening there.',
       'none',
       { cause: error },
     )

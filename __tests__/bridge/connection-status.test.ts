@@ -17,7 +17,8 @@ vi.mock('imapflow', () => ({
 
 // No certificate is read: nothing listens, and the pin file is never touched.
 vi.mock('../../src/bridge/certificate.js', () => ({
-  ensurePinned: async () => ({ pem: '', fingerprint256: '' }),
+  pinFor: async () => ({ pem: '', fingerprint256: '' }),
+  certificateChanged: async () => undefined,
 }))
 
 const { Connection } = await import('../../src/bridge/connection.js')
