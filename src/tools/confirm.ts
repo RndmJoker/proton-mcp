@@ -48,6 +48,7 @@ import {
   fingerprintPart,
   firstLines,
   hiddenTextOf,
+  storedBeyondOf,
   composedBody,
   showRecipient,
   summariseQuote,
@@ -106,11 +107,20 @@ export function digestOf(draft: Draft): string {
     markupLevel: draft.markupLevel ?? null,
     inReplyTo: draft.inReplyTo ?? null,
     attached: draft.attachedMessage?.filename ?? null,
+    // The body of a stored draft, which is sent unchecked, and so has to be
+    // exactly the body that was agreed to.
+    stored: draft.storedHtml ?? null,
     // The contents of every carried file, not just its name. A confirmation
     // that covered the name alone would let the picture be swapped after it
     // was agreed to.
     parts: (draft.inlineParts ?? [])
       .map((part) => `${part.contentId}:${part.contentType}:${fingerprintPart(part.content)}`)
+      .sort(),
+    carried: (draft.carriedFiles ?? [])
+      .map(
+        (file) =>
+          `${file.filename}:${file.contentType}:${file.contentId ?? ''}:${fingerprintPart(file.content)}`,
+      )
       .sort(),
   })
   return createHash('sha256').update(canonical).digest('hex')
@@ -181,18 +191,33 @@ export function describeForConfirmation(draft: Draft, what: string, previewUrl?:
   // something was demonstrably hidden. Whether a value hides anything depends
   // on where it sits, and a warning clever enough to judge that is a warning
   // that will be wrong once, in the direction nobody wants.
+  //
+  // A stored draft is sent as it was stored, without the check composed markup
+  // goes through, so it gets the same warning whenever it carries more than
+  // `standard` would have let through.
   const notes = styleNotesOf(draft)
-  if (notes.length > 0) {
+  const beyond = storedBeyondOf(draft)
+  if (notes.length > 0 || beyond.length > 0) {
     const hiding = notes.filter((n) => n.hides)
+    lines.push('', '!!! THIS MESSAGE USES MARKUP THAT CAN HIDE CONTENT !!!', '')
+    if (notes.length > 0) {
+      lines.push(
+        hiding.length > 0
+          ? `${notes.length} unusual propert(ies) were used, and ${hiding.length} of them put ` +
+            'something out of sight. What a recipient sees is not what this message says it is.'
+          : `${notes.length} unusual propert(ies) were used. None of them hides anything by ` +
+            'itself, but they are the ones that can.',
+      )
+    }
+    if (beyond.length > 0) {
+      lines.push(
+        // A count, not a list: a quoted newsletter repeats such things dozens of
+        // times, and a list here is how the question once outgrew its dialog.
+        `The stored draft carries ${beyond.length} thing(s) a message written here may not ` +
+          'contain, listed on the preview page. It is sent as it was stored, without that check.',
+      )
+    }
     lines.push(
-      '',
-      '!!! THIS MESSAGE USES MARKUP THAT CAN HIDE CONTENT !!!',
-      '',
-      hiding.length > 0
-        ? `${notes.length} unusual propert(ies) were used, and ${hiding.length} of them put ` +
-          'something out of sight. What a recipient sees is not what this message says it is.'
-        : `${notes.length} unusual propert(ies) were used. None of them hides anything by ` +
-          'itself, but they are the ones that can.',
       'Open the preview and look before answering. It names every one, its value and where it sat.',
     )
   }

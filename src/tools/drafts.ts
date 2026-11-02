@@ -47,6 +47,13 @@ function describeDraft(draft: DraftResult, what: string): string {
         'draft, so nothing of it is lost.',
     )
   }
+  if (draft.keptFiles?.length) {
+    lines.push(
+      '',
+      `${draft.keptFiles.length} file(s) stored with the draft stay with it: ` +
+        `${draft.keptFiles.join(', ')}.`,
+    )
+  }
   lines.push(
     '',
     'Nothing has been sent. Use send_draft when the message is ready; that asks the user to ' +

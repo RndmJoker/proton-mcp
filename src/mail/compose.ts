@@ -25,6 +25,7 @@ import {
 } from './markup.js'
 import { prepareQuotedMarkup } from './quote.js'
 import { htmlToText } from '../mime/parse.js'
+import type { CarriedFile } from '../mime/parts.js'
 
 /** An address, optionally with a display name. */
 export interface Recipient {
@@ -88,6 +89,21 @@ export interface Draft {
   quotedHtml?: string
   /** Files referenced from the markup by content id. */
   inlineParts?: InlinePart[]
+  /**
+   * The markup body of a stored draft, read back to be sent or kept, and kept
+   * apart from `html` on purpose.
+   *
+   * It is not held to the permitted set again. It was held to it when it was
+   * written through this server, or a person wrote it in Proton. Once stored,
+   * the composed part and a quote can no longer be told apart, and the level
+   * it was written at is recorded nowhere, so a second check refused every
+   * formatted reply on the <style> of its quote. It is read the way a quote
+   * is instead: the confirmation counts and the preview names everything in
+   * it, and anything beyond `standard` carries the same warning as `extended`.
+   */
+  storedHtml?: string
+  /** Files read back from a stored draft, carried along as they were stored. */
+  carriedFiles?: CarriedFile[]
 }
 
 /** A file carried inside the message and referenced from the markup. */
@@ -264,7 +280,28 @@ export async function buildMessage(
     date: new Date(),
   }
 
-  if (draft.html === undefined) {
+  if (draft.html !== undefined && draft.storedHtml !== undefined) {
+    // One body or the other. Both would mean the composed part had been checked
+    // and the stored part would go out beside it unread.
+    throw new BridgeError('A message cannot carry composed markup and a stored body at once.')
+  }
+
+  if (draft.storedHtml !== undefined) {
+    // Not checked against the permitted set, see Draft.storedHtml. What is
+    // still checked is that every picture it shows arrived with it.
+    const provided = new Set([
+      ...(draft.inlineParts ?? []).map((part) => part.contentId),
+      ...(draft.carriedFiles ?? []).flatMap((file) => (file.contentId ? [file.contentId] : [])),
+    ])
+    const missing = readMarkup(draft.storedHtml, 'extended').contentIds.filter((id) => !provided.has(id))
+    if (missing.length) {
+      throw new BridgeError(
+        `The stored draft refers to ${missing.map((id) => `"cid:${id}"`).join(', ')}, but no such ` +
+          'file is stored with it. Open the draft in Proton and attach the picture again.',
+      )
+    }
+    fields.html = draft.storedHtml
+  } else if (draft.html === undefined) {
     fields.text = draft.text
   } else {
     // Checked here rather than only at the tool, so that no path into this
@@ -274,7 +311,10 @@ export async function buildMessage(
     // Every content id the markup points at has to have arrived with it. A
     // reference to a part that is not there shows the recipient a broken image
     // where the sender saw a picture, and neither of them finds out why.
-    const provided = new Set((draft.inlineParts ?? []).map((part) => part.contentId))
+    const provided = new Set([
+      ...(draft.inlineParts ?? []).map((part) => part.contentId),
+      ...(draft.carriedFiles ?? []).flatMap((file) => (file.contentId ? [file.contentId] : [])),
+    ])
     const missing = reading.contentIds.filter((id) => !provided.has(id))
     if (missing.length) {
       throw new BridgeError(
@@ -304,6 +344,14 @@ export async function buildMessage(
       content: part.content,
       contentType: part.contentType,
       cid: part.contentId,
+    })
+  }
+  for (const file of draft.carriedFiles ?? []) {
+    attachments.push({
+      filename: file.filename,
+      content: file.content,
+      contentType: file.contentType,
+      ...(file.contentId ? { cid: file.contentId } : {}),
     })
   }
   if (attachments.length) fields.attachments = attachments
@@ -538,6 +586,7 @@ export const PLAIN_TEXT_NOTE =
  * to, and that is exactly the difference a person confirming a send has to see.
  */
 export function readableBody(draft: Draft): string {
+  if (draft.storedHtml !== undefined) return htmlToText(draft.storedHtml)
   return draft.html === undefined
     ? draft.text
     : htmlToText(draft.html + (draft.quotedHtml ?? ''))
@@ -552,6 +601,7 @@ export function readableBody(draft: Draft): string {
  * before their own words appear.
  */
 export function composedBody(draft: Draft): string {
+  if (draft.storedHtml !== undefined) return htmlToText(draft.storedHtml)
   return draft.html === undefined ? draft.text : htmlToText(draft.html)
 }
 
@@ -607,11 +657,18 @@ export function describeAttachments(draft: Draft): string[] {
   for (const part of draft.inlineParts ?? []) {
     lines.push(`${part.filename} (${part.contentType}, ${part.content.length} bytes, in the message body)`)
   }
+  for (const file of draft.carriedFiles ?? []) {
+    const where = file.contentId ? ', in the message body' : ''
+    lines.push(
+      `${file.filename} (${file.contentType}, ${file.content.length} bytes, stored with the draft${where})`,
+    )
+  }
   return lines
 }
 
 /** The addresses in a message's markup, with the text they are shown as. */
 export function describeUrls(draft: Draft): MarkupUrl[] {
+  if (draft.storedHtml !== undefined) return readMarkup(draft.storedHtml, 'extended').urls
   return draft.html === undefined
     ? []
     : assertSendableMarkup(draft.html, draft.markupLevel ?? 'standard').urls
@@ -619,6 +676,7 @@ export function describeUrls(draft: Draft): MarkupUrl[] {
 
 /** Text a recipient can read that the readable body leaves out. */
 export function hiddenTextOf(draft: Draft): string[] {
+  if (draft.storedHtml !== undefined) return readMarkup(draft.storedHtml, 'extended').hiddenText
   return draft.html === undefined
     ? []
     : assertSendableMarkup(draft.html, draft.markupLevel ?? 'standard').hiddenText
@@ -638,6 +696,20 @@ export function fingerprintPart(content: Buffer): string {
  * "what did it use" is a list rather than a promise.
  */
 export function styleNotesOf(draft: Draft): StyleNote[] {
+  if (draft.storedHtml !== undefined) return readMarkup(draft.storedHtml, 'extended').styleNotes
   if (draft.html === undefined) return []
   return assertSendableMarkup(draft.html, draft.markupLevel ?? 'standard').styleNotes
+}
+
+/**
+ * What a stored body carries that no composed message may: style blocks,
+ * scripts, event handlers, data: addresses, comments.
+ *
+ * Empty for anything that is not a stored draft, because composed markup with
+ * such a thing never gets this far. For a stored draft it is part of what the
+ * confirmation warns about, since it was not checked again on the way out.
+ */
+export function storedBeyondOf(draft: Draft): string[] {
+  if (draft.storedHtml === undefined) return []
+  return readMarkup(draft.storedHtml, 'extended').problems.map((problem) => problem.found)
 }

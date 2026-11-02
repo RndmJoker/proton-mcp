@@ -19,6 +19,7 @@ import {
   describeAttachments,
   describeUrls,
   hiddenTextOf,
+  storedBeyondOf,
   summariseQuote,
   styleNotesOf,
   showRecipient,
@@ -41,6 +42,11 @@ export interface PendingView {
   attachments: string[]
   quoted?: { links: number; images: number; hiddenText: number }
   styleNotes: Array<{ property: string; value: string; element: string; hides: boolean }>
+  /**
+   * Set for a stored draft, which is sent as it was stored without the check a
+   * composed message goes through. Lists what that check would have refused.
+   */
+  stored?: { beyond: string[] }
 }
 
 /**
@@ -53,6 +59,7 @@ export interface PendingView {
  * includes the quote.
  */
 function bodyFor(draft: Draft): { html?: string; text?: string } {
+  if (draft.storedHtml !== undefined) return { html: draft.storedHtml }
   if (draft.html !== undefined) {
     return { html: `${draft.html}${draft.quotedHtml ?? ''}` }
   }
@@ -79,6 +86,7 @@ export function pendingView(digest: string): PendingView | undefined {
     hiddenText: hiddenTextOf(draft),
     attachments: describeAttachments(draft),
     styleNotes: styleNotesOf(draft),
+    ...(draft.storedHtml !== undefined ? { stored: { beyond: storedBeyondOf(draft) } } : {}),
     ...(quote
       ? {
           quoted: {

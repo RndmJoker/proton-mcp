@@ -44,7 +44,8 @@ import type { Connection } from '../bridge/connection.js'
 import { BridgeError } from '../bridge/errors.js'
 import { normaliseMessageId, findByMessageId } from './ids.js'
 import { getMessage, listMessages, type ListResult } from './messages.js'
-import { htmlToText } from '../mime/parse.js'
+import { htmlToText, parseMessage, type ParsedMessage } from '../mime/parse.js'
+import { readParts, type StoredParts } from '../mime/parts.js'
 import type { MarkupLevel } from './markup.js'
 import {
   allRecipients,
@@ -124,6 +125,8 @@ export interface DraftResult {
   uid: number
   /** Set when a whole message was carried along, as with a forward. */
   carriedAttachments?: string[]
+  /** Files that were stored with the draft and stay with it. */
+  keptFiles?: string[]
 }
 
 /**
@@ -174,6 +177,30 @@ async function findDraft(
     const message = await client.fetchOne(String(uid), { flags: true }, { uid: true })
     return { uid, flags: message && message.flags ? message.flags : new Set<string>() }
   })
+}
+
+/**
+ * A stored draft as it lies in Drafts.
+ *
+ * The headers are read as everywhere else. Body and files come from readParts
+ * rather than from mailparser, which writes a forwarded original into the body
+ * and rewrites every cid: picture, so that what came back was not what had
+ * been stored. See src/mime/parts.ts.
+ */
+async function readStored(
+  connection: Connection,
+  uid: number,
+): Promise<{ message: ParsedMessage; parts: StoredParts }> {
+  const source = await connection.withMailbox(DRAFTS, async (client: ImapFlow) => {
+    const message = await client.fetchOne(String(uid), { source: true }, { uid: true })
+    return message && message.source ? message.source : undefined
+  })
+  if (!source) {
+    throw new BridgeError(
+      `The draft could not be read from "${DRAFTS}". It may have been sent or moved in the meantime.`,
+    )
+  }
+  return { message: await parseMessage(source), parts: await readParts(source) }
 }
 
 /** Writes a built message into Drafts and describes what was stored. */
@@ -266,7 +293,7 @@ export async function updateDraft(
     )
   }
 
-  const current = await getMessage(connection, id, { hint: DRAFTS })
+  const { message: current, parts } = await readStored(connection, existing.uid)
   const from = parseRecipient(fromAddress)
 
   const draft: Draft = {
@@ -278,8 +305,11 @@ export async function updateDraft(
     // only ever true for a draft this server wrote.
     bcc: changes.bcc === undefined ? current.bcc : parseRecipients(changes.bcc),
     subject: changes.subject === undefined ? current.subject : changes.subject,
-    ...markupOf(changes, current),
+    ...bodyOf(changes, parts),
     messageId: id,
+    // Kept whatever happens to the body. No tool removes a file from a draft,
+    // so none may disappear as a side effect of changing the text.
+    ...(parts.files.length ? { carriedFiles: parts.files } : {}),
   }
   // The recipients carried over were read back from the stored draft rather
   // than typed, and have not been through parseRecipient.
@@ -302,6 +332,7 @@ export async function updateDraft(
     cc: draft.cc,
     bcc: draft.bcc,
     uid,
+    ...(parts.files.length ? { keptFiles: parts.files.map((file) => file.filename) } : {}),
   }
 }
 
@@ -322,17 +353,20 @@ export async function updateDraft(
  * `standard`. A level carried over onto markup nobody re-stated would be a
  * permission granted by an earlier call.
  */
-function markupOf(
+function bodyOf(
   changes: DraftInput,
-  current: { text: string; html?: string },
-): { text: string; html?: string; markupLevel?: MarkupLevel } {
-  const level = changes.markupLevel !== undefined ? { markupLevel: changes.markupLevel } : {}
-  if (changes.html !== undefined)
+  stored: StoredParts,
+): { text: string; html?: string; markupLevel?: MarkupLevel; storedHtml?: string } {
+  if (changes.html !== undefined) {
+    const level = changes.markupLevel !== undefined ? { markupLevel: changes.markupLevel } : {}
     return { text: htmlToText(changes.html), html: changes.html, ...level }
+  }
   if (changes.text !== undefined) return { text: changes.text }
-  return current.html !== undefined
-    ? { text: current.text, html: current.html, ...level }
-    : { text: current.text }
+  // Nothing restated: the stored body stays as it was, quote and all, and is
+  // not checked again. See Draft.storedHtml for why it cannot be.
+  return stored.html !== undefined
+    ? { text: htmlToText(stored.html), storedHtml: stored.html }
+    : { text: (stored.text ?? '').trim() }
 }
 
 /**
@@ -629,7 +663,7 @@ export async function readDraftForSending(
     )
   }
 
-  const stored = await getMessage(connection, id, { hint: DRAFTS })
+  const { message: stored, parts } = await readStored(connection, existing.uid)
   if (stored.to.length === 0 && stored.cc.length === 0 && stored.bcc.length === 0) {
     throw new BridgeError(
       `The draft ${id} has no recipient, so there is nobody to send it to. Add one with ` +
@@ -647,10 +681,16 @@ export async function readDraftForSending(
     cc: stored.cc,
     bcc: stored.bcc,
     subject: stored.subject,
-    text: stored.text,
+    text: parts.html !== undefined ? htmlToText(parts.html) : (parts.text ?? '').trim(),
     messageId: id,
     // A draft written as markup is sent as the markup it was. Converting it to
-    // text and back would deliver something its author never wrote.
-    ...(stored.html !== undefined ? { html: stored.html } : {}),
+    // text and back would deliver something its author never wrote. It goes
+    // out as it was stored, without the check composed markup goes through,
+    // which is what Draft.storedHtml explains.
+    ...(parts.html !== undefined ? { storedHtml: parts.html } : {}),
+    // Its files too, the forwarded original among them. Up to 0.4.11 they were
+    // dropped here, and a forward sent from a draft went out without the
+    // message it forwarded.
+    ...(parts.files.length ? { carriedFiles: parts.files } : {}),
   }
 }

@@ -362,3 +362,72 @@ describe('a quoted message in the preview', () => {
     expect(digestOf(two)).not.toBe(digestOf(one))
   })
 })
+
+describe('a stored draft is sent unchecked, but not unread', () => {
+  // A stored draft is sent as it was stored, because its own part and its quote
+  // can no longer be told apart. What that must not cost is the warning and the
+  // binding: the person answering still sees everything, and agrees to exactly
+  // that.
+  const stored = (storedHtml: string, over: Partial<Draft> = {}): Draft =>
+    draft({ storedHtml, text: readableBody({ ...draft(), storedHtml }), ...over })
+
+  it('warns when it carries something no composed message may', () => {
+    const question = describeForConfirmation(
+      stored('<style>p { color: red }</style><p>Hello</p>'),
+      'This draft',
+      'http://localhost/preview',
+    )
+    expect(question).toContain('!!! THIS MESSAGE USES MARKUP THAT CAN HIDE CONTENT !!!')
+    expect(question).toMatch(/carries 1 thing\(s\) a message written here may not contain/)
+  })
+
+  it('warns about unusual properties as it would at extended', () => {
+    const question = describeForConfirmation(
+      stored('<p>Hello <span style="display: none">hidden</span></p>'),
+      'This draft',
+      'http://localhost/preview',
+    )
+    expect(question).toContain('!!! THIS MESSAGE USES MARKUP THAT CAN HIDE CONTENT !!!')
+    expect(question).toMatch(/unusual propert\(ies\) were used/)
+  })
+
+  it('does not warn about one that stays inside standard', () => {
+    const question = describeForConfirmation(stored('<p>Hello</p>'), 'This draft', 'http://localhost/preview')
+    expect(question).not.toContain('!!!')
+  })
+
+  it('binds the yes to the stored body and to every file it carries', () => {
+    const notes = { filename: 'notes.txt', contentType: 'text/plain', content: Buffer.from('one') }
+    const one = stored('<p>Hello</p>', { carriedFiles: [notes] })
+    // Two bodies that read alike and differ only in markup. The readable text
+    // cannot tell them apart, so the stored body itself has to.
+    expect(digestOf(stored('<p style="color: red">Hello</p>', { carriedFiles: [notes] }))).not.toBe(
+      digestOf(one),
+    )
+    expect(
+      digestOf(stored('<p>Hello</p>', { carriedFiles: [{ ...notes, content: Buffer.from('two') }] })),
+    ).not.toBe(digestOf(one))
+  })
+
+  it('lists on the preview what it carries unchecked', () => {
+    const page = previewFor(stored('<style>p { color: red }</style><p>Hello</p>'), 'send_draft')
+    expect(page).toContain('Sent as it was stored')
+    expect(page).toContain('&lt;style&gt;')
+  })
+
+  it('names the files stored with it', () => {
+    const page = previewFor(
+      stored('<p>Hello</p>', {
+        carriedFiles: [{ filename: 'report.pdf', contentType: 'application/pdf', content: Buffer.from('x') }],
+      }),
+      'send_draft',
+    )
+    expect(page).toContain('report.pdf (application/pdf, 1 bytes, stored with the draft)')
+  })
+
+  it('refuses composed markup and a stored body at once', async () => {
+    await expect(buildMessage(stored('<p>stored</p>', { html: '<p>composed</p>' }))).rejects.toThrow(
+      /composed markup and a stored body at once/,
+    )
+  })
+})
