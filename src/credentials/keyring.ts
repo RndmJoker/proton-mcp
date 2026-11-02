@@ -107,12 +107,30 @@ export class KeyringStore implements CredentialStore {
     entry.setPassword(JSON.stringify({ user: credentials.user, pass: credentials.pass }))
   }
 
+  /**
+   * Removes the entry, and succeeds only once it is gone.
+   *
+   * Read before and after, because deletePassword() answers false both when
+   * there is nothing and when the entry is in a store it cannot see. Until
+   * 2026-11-02 its answer and every error were dropped here, and a sign-out
+   * reported success while the password stayed (#52).
+   */
   async clear(): Promise<void> {
-    const entry = await this.#entry()
+    const module = await loadKeyringModule()
+    // Without the module, this installation cannot have stored anything here.
+    if (!module) return
+    const entry = new module.Entry(this.service, this.account)
     try {
+      if (!entry.getPassword()) return
       entry.deletePassword()
-    } catch {
-      // Nothing stored is the outcome we wanted anyway.
+      if (entry.getPassword()) throw new Error('the entry was still there after deleting it')
+    } catch (error) {
+      const reason = error instanceof Error ? error.message.split('\n')[0] : String(error)
+      throw new BridgeError(
+        `The Bridge password could not be removed from the system keyring: ${reason}. Remove the ` +
+          `entry "${this.service}" for "${this.account}" by hand, in the program that manages this ` +
+          'keyring: Seahorse, KWalletManager, Keychain Access or the Credential Manager.',
+      )
     }
   }
 }

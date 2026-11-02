@@ -29,7 +29,11 @@ export interface CredentialStore {
   /** Returns the credentials, or undefined when none are stored. */
   load(): Promise<Credentials | undefined>
   save(credentials: Credentials): Promise<void>
-  /** Removes what is stored. Succeeds even when nothing was there. */
+  /**
+   * Removes what is stored. Succeeds when nothing is left, also when nothing
+   * was there, and otherwise throws an explanation that says how to remove it
+   * by hand. Until 2026-11-02 every store swallowed its failures here (#52).
+   */
   clear(): Promise<void>
   /**
    * Whether something is stored, without unlocking it.

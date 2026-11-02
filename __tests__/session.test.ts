@@ -133,6 +133,90 @@ describe('Session sign-in state', () => {
   })
 })
 
+/** A store whose clear fails, the way a file in a read-only directory does. */
+function stuck(kind: StoreKind, initial?: Credentials): CredentialStore {
+  return {
+    kind,
+    load: async () => initial,
+    save: async () => undefined,
+    clear: async () => {
+      throw new Error(`The ${kind} could not be emptied. Do it by hand.`)
+    },
+  }
+}
+
+describe('Session sign-out that cannot remove everything (#52)', () => {
+  it('says what is left, and forgets the credentials in this process anyway', async () => {
+    const session = new Session({
+      stores: harmlessStores({ 'plain-file': stuck('plain-file', creds), 'encrypted-file': fake('encrypted-file') }),
+      notify: quiet,
+    })
+    await session.signIn(creds, 'session')
+    const left = await session.signOut()
+    expect(left).toEqual(['The plain-file could not be emptied. Do it by hand.'])
+    expect(session.signedIn).toBe(false)
+    expect(await session.credentials()).toBeUndefined()
+  })
+
+  it('returns nothing when every store is empty', async () => {
+    const session = new Session({
+      stores: harmlessStores({ 'encrypted-file': fake('encrypted-file') }),
+      notify: quiet,
+    })
+    await session.signIn(creds, 'keyring')
+    expect(await session.signOut()).toEqual([])
+  })
+})
+
+describe('Session sign-in replaces earlier credentials (#53)', () => {
+  const other: Credentials = { user: 'other@example.com', pass: 'other-password' }
+
+  it('empties every other store, so a restart cannot sign in with the earlier one', async () => {
+    const all = {
+      keyring: fake('keyring'),
+      session: fake('session'),
+      'plain-file': fake('plain-file'),
+      'encrypted-file': fake('encrypted-file'),
+    }
+    const session = new Session({ stores: all, notify: quiet })
+    await session.signIn(creds, 'keyring')
+    expect(await session.signIn(other, 'session')).toEqual([])
+    expect(session.address).toBe(other.user)
+    expect(await all.keyring.load()).toBeUndefined()
+
+    // The next start, with this run's session store gone as it would be.
+    const restarted = new Session({ stores: { ...all, session: fake('session') }, notify: quiet })
+    expect(await restarted.credentials()).toBeUndefined()
+  })
+
+  it('leaves the store it saved to alone', async () => {
+    const all = {
+      keyring: fake('keyring'),
+      session: fake('session'),
+      'plain-file': fake('plain-file'),
+      'encrypted-file': fake('encrypted-file'),
+    }
+    const session = new Session({ stores: all, notify: quiet })
+    await session.signIn(creds, 'keyring')
+    expect(all.keyring.cleared).toBe(0)
+    expect(await all.keyring.load()).toEqual(creds)
+    for (const kind of ['session', 'plain-file', 'encrypted-file'] as const) {
+      expect(all[kind].cleared).toBe(1)
+    }
+  })
+
+  it('stands when another store cannot be emptied, and says which', async () => {
+    const session = new Session({
+      stores: harmlessStores({ keyring: stuck('keyring', creds), 'encrypted-file': fake('encrypted-file') }),
+      notify: quiet,
+    })
+    const left = await session.signIn(other, 'session')
+    expect(left).toEqual(['The keyring could not be emptied. Do it by hand.'])
+    expect(session.signedIn).toBe(true)
+    expect(session.address).toBe(other.user)
+  })
+})
+
 describe('Session with an encrypted file', () => {
   /** A session whose encrypted store is the real one, pointed at the temp path. */
   const build = () => new Session({ stores: harmlessStores(), notify: quiet })

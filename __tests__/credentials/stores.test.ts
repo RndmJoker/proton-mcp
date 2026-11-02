@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, statSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionStore } from '../../src/credentials/session.js'
@@ -174,6 +174,15 @@ describe('EncryptedFileStore', () => {
     await expect(store.clear()).resolves.toBeUndefined()
   })
 
+  it('reports a file it cannot delete instead of reporting success', async () => {
+    const path = join(dir, 'creds.enc')
+    mkdirSync(path)
+    await expect(new EncryptedFileStore(async () => 'master', path).clear()).rejects.toThrow(
+      new RegExp(`The encrypted file ${path} could not be deleted: `),
+    )
+    expect(existsSync(path)).toBe(true)
+  })
+
   it('reports whether a file is there without asking for the password', async () => {
     // What tells "nothing stored" from "stored but locked". The first calls for
     // the full sign-in form, the second only for a master password, so getting
@@ -274,6 +283,75 @@ describe('KeyringStore', () => {
     await store.save(creds)
     await store.clear()
     expect(await store.load()).toBeUndefined()
+  })
+
+  /** A keyring whose delete leaves the entry, the way one in another store looks (#52, #54). */
+  function stubbornKeyring(deletePassword: () => boolean) {
+    let stored: string | null = JSON.stringify(creds)
+    return {
+      get stored() {
+        return stored
+      },
+      module: {
+        Entry: class {
+          setPassword(password: string): void {
+            stored = password
+          }
+          getPassword(): string | null {
+            return stored
+          }
+          deletePassword(): boolean {
+            return deletePassword()
+          }
+        },
+      },
+    }
+  }
+
+  it('reports an entry that is still there after deleting it', async () => {
+    // deletePassword() answered false and the entry stayed. Until 2026-11-02
+    // that answer was dropped and the sign-out looked clean.
+    const fake = stubbornKeyring(() => false)
+    _setKeyringModule(fake.module)
+    const failure = new KeyringStore('svc', 'acct').clear()
+    await expect(failure).rejects.toThrow(/could not be removed from the system keyring/)
+    await expect(failure).rejects.toThrow(/"svc" for "acct" by hand/)
+    expect(fake.stored).not.toBeNull()
+  })
+
+  it('reports a delete that fails', async () => {
+    const fake = stubbornKeyring(() => {
+      throw new Error('Platform secure storage failure\nwith detail')
+    })
+    _setKeyringModule(fake.module)
+    await expect(new KeyringStore('svc', 'acct').clear()).rejects.toThrow(
+      /could not be removed from the system keyring: Platform secure storage failure\. /,
+    )
+  })
+
+  it('does not delete when there is nothing to delete', async () => {
+    let deletes = 0
+    _setKeyringModule({
+      Entry: class {
+        setPassword(): void {}
+        getPassword(): string | null {
+          return null
+        }
+        deletePassword(): boolean {
+          deletes++
+          return false
+        }
+      },
+    })
+    await expect(new KeyringStore('svc', 'acct').clear()).resolves.toBeUndefined()
+    expect(deletes).toBe(0)
+  })
+
+  it('has nothing to clear without the optional dependency', async () => {
+    // This installation cannot have stored anything there, and a sign-out must
+    // not report a failure for a store it never had.
+    _setKeyringModule(undefined)
+    await expect(new KeyringStore().clear()).resolves.toBeUndefined()
   })
 })
 
@@ -427,6 +505,17 @@ describe('PlainFileStore', () => {
     await store.clear()
     expect(existsSync(path)).toBe(false)
     await expect(store.clear()).resolves.toBeUndefined()
+  })
+
+  it('reports a file it cannot delete instead of reporting success', async () => {
+    // A directory where the file should be: unlink fails on it for any user,
+    // root included, which a read-only parent directory would not guarantee.
+    const path = join(dir, 'env')
+    mkdirSync(path)
+    await expect(new PlainFileStore(path).clear()).rejects.toThrow(
+      new RegExp(`The plain file ${path} could not be deleted: .*delete it by hand`),
+    )
+    expect(existsSync(path)).toBe(true)
   })
 })
 

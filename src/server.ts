@@ -137,18 +137,30 @@ async function main(): Promise<void> {
     onSignIn: async (credentials, storeKind, masterPassword) => {
       const failure = await verify(credentials)
       if (failure) return failure
+      let left: string[]
       try {
-        await session.signIn(credentials, storeKind, masterPassword)
+        left = await session.signIn(credentials, storeKind, masterPassword)
       } catch (error) {
         return (error as Error).message
       }
       // Drop the old connection so the next call uses the new credentials.
       await connection.close()
-      return undefined
+      if (left.length === 0) return undefined
+      return {
+        warning:
+          `Signed in, and the password is kept where you chose. An earlier one is still stored ` +
+          `elsewhere, though. ${left.join(' ')} Until it is gone, the next start may sign in ` +
+          'with it instead.',
+      }
     },
     onSignOut: async () => {
-      await session.signOut()
+      const left = await session.signOut()
       await connection.close()
+      if (left.length === 0) return undefined
+      return (
+        `Signed out here, but not everywhere. ${left.join(' ')} Until that is done, the next start ` +
+        'signs in with what is left.'
+      )
     },
     onUnlock: async (masterPassword) => {
       let credentials
@@ -162,18 +174,24 @@ async function main(): Promise<void> {
       // the user would rather have answered here than at the next tool call.
       const failure = await verify(credentials)
       if (failure) {
-        await session.signOut()
+        const left = await session.signOut()
         return (
           `${failure}\n\nThe file was decrypted, so the master password was correct, but the ` +
-          'Bridge password inside it no longer works. Sign in again with a fresh one.'
+          'Bridge password inside it no longer works. Sign in again with a fresh one.' +
+          (left.length ? `\n\nNot everything stored could be removed. ${left.join(' ')}` : '')
         )
       }
       await connection.close()
       return undefined
     },
     onDiscardEncrypted: async () => {
-      await session.discardEncrypted()
+      try {
+        await session.discardEncrypted()
+      } catch (error) {
+        return (error as Error).message
+      }
       notify('the encrypted credentials file was deleted on request')
+      return undefined
     },
     getStatus: async () => {
       const pinned = loadPinned(pinPath())

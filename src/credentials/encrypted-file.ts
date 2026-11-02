@@ -180,8 +180,14 @@ export class EncryptedFileStore implements CredentialStore {
   async clear(): Promise<void> {
     try {
       await unlink(this.path)
-    } catch {
-      // Already gone is the outcome we wanted.
+    } catch (error) {
+      // Already gone is the outcome we wanted. Anything else leaves the file
+      // where the next start offers to unlock it again (#52).
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw new BridgeError(
+        `The encrypted file ${this.path} could not be deleted: ${(error as Error).message}. Delete it ` +
+          'by hand.',
+      )
     }
   }
 }
