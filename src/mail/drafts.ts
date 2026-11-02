@@ -52,6 +52,7 @@ import {
   allRecipients,
   assertDeliverable,
   buildMessage,
+  FORWARD_HEADER,
   mintMessageId,
   parseRecipient,
   parseRecipients,
@@ -555,7 +556,7 @@ export async function buildForwardDraft(
 
   const header = [
     '',
-    '---------- Forwarded message ----------',
+    FORWARD_HEADER,
     `From: ${original.from.map((f) => (f.name ? `${f.name} <${f.address}>` : f.address)).join(', ')}`,
     `Date: ${original.date ? original.date.toISOString().slice(0, 16).replace('T', ' ') : 'unknown'}`,
     `Subject: ${original.subject || '(no subject)'}`,
@@ -573,7 +574,7 @@ export async function buildForwardDraft(
       ? { text: `${text}\n${header}${original.text}` }
       : (() => {
           const head =
-            `<p>---------- Forwarded message ----------<br>` +
+            `<p>${FORWARD_HEADER}<br>` +
             `From: ${escapeHtml(original.from.map((f) => (f.name ? `${f.name} <${f.address}>` : f.address)).join(', '))}<br>` +
             `Date: ${escapeHtml(original.date ? original.date.toISOString().slice(0, 16).replace('T', ' ') : 'unknown')}<br>` +
             `Subject: ${escapeHtml(original.subject || '(no subject)')}<br>` +

@@ -51,7 +51,7 @@ import {
   storedBeyondOf,
   composedBody,
   showRecipient,
-  summariseQuote,
+  carriesQuote,
   styleNotesOf,
   type Draft,
 } from '../mail/compose.js'
@@ -257,13 +257,15 @@ function countsFor(draft: Draft): string | undefined {
   const urls = describeUrls(draft)
   const hidden = hiddenTextOf(draft)
   const files = describeAttachments(draft)
-  const quoted = summariseQuote(draft)
 
   const parts: string[] = []
   if (urls.length) parts.push(`${urls.length} address(es)`)
   if (hidden.length) parts.push(`${hidden.length} piece(s) of text the body does not show`)
-  if (files.length) parts.push(`${files.length} carried file(s)`)
-  if (quoted) parts.push('a quoted message')
+  // "file(s)", not "carried file(s)": the line already begins "It carries".
+  if (files.length) parts.push(`${files.length} file(s)`)
+  // Seen in the body as well as apart from it, so a stored draft and a plain
+  // text reply say so too, see carriesQuote.
+  if (carriesQuote(draft)) parts.push('a quoted message')
 
   if (!parts.length) return undefined
   const list =

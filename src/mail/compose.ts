@@ -644,6 +644,28 @@ export function summariseQuote(draft: Draft): QuoteSummary | undefined {
   }
 }
 
+/** The line this server writes above every forwarded message, in text and in markup. */
+export const FORWARD_HEADER = '---------- Forwarded message ----------'
+
+/**
+ * Whether the message carries a quoted one, for the count line of the
+ * confirmation.
+ *
+ * summariseQuote only sees a quote that is still held apart from the body,
+ * which is the case while a reply or a forward is composed with markup. Once a
+ * draft is stored, and in a plain text reply, the quote is part of the body,
+ * and up to 0.4.11 the confirmation said nothing about it. It is recognised
+ * there by what quotes it: the forward header this server writes, the "wrote:"
+ * line followed by quoted lines, or a blockquote, which is how Proton quotes.
+ */
+export function carriesQuote(draft: Draft): boolean {
+  if (draft.quotedHtml) return true
+  if (draft.storedHtml !== undefined) {
+    return /<blockquote\b/i.test(draft.storedHtml) || draft.storedHtml.includes(FORWARD_HEADER)
+  }
+  return draft.text.includes(FORWARD_HEADER) || /^On .+ wrote:\n>/m.test(draft.text)
+}
+
 /**
  * Everything the message points at or carries, for the confirmation.
  *
