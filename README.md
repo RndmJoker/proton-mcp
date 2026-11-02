@@ -365,6 +365,8 @@ To switch it on, add the variable to the server's entry in your client's configu
 
 The directory has to exist; it is not created for you, so that a mistyped path does not become a new place for mail to land.
 
+**Do not choose a folder that is synced to a cloud service.** A file saved there leaves your machine decrypted, and the server cannot tell such a folder from any other.
+
 ### The web interface
 
 It binds to `127.0.0.1` and there is no option to change that. It is not remote access and cannot be made into it. Four defences, each against a specific attack:
