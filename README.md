@@ -2,6 +2,10 @@
 
 An MCP server for Proton Mail. It talks to a locally running Proton Mail Bridge and makes your mailbox available to AI assistants such as Claude.
 
+> **Unofficial.** proton-mcp is not made by, affiliated with or endorsed by Proton AG. "Proton" and "Proton Mail" are their trademarks.
+>
+> **Largely AI-generated.** Most of the code, tests and documentation in this repository were written by Anthropic's Claude Opus models. I decide what gets built and how, and I note this on every one of my projects that is largely AI-generated.
+
 **Status: under construction.** Reading works and can be used, and so does signing in through the browser. Labels, moving between folders, read state, trash, drafts and sending all work. Every send asks you first, and that question is enforced by the server rather than requested in a prompt. See [Status](#status) for the details.
 
 ## Why everything runs locally
