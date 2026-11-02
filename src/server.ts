@@ -35,6 +35,8 @@ import { registerLabelTools } from './tools/labels.js'
 import { registerActionTools } from './tools/actions.js'
 import { registerDraftTools } from './tools/drafts.js'
 import { registerSendTools } from './tools/send.js'
+import { registerSavedAttachmentTools } from './tools/saved.js'
+import { SavedAttachments } from './mail/saved-attachments.js'
 import type { PendingSend } from './tools/confirm.js'
 import { setSignInHint, setLockedCheck } from './tools/failures.js'
 import { pendingView } from './tools/pending-view.js'
@@ -102,6 +104,14 @@ async function main(): Promise<void> {
   // than at startup: a client often spawns the server long before the user wants
   // anything, and a locked Bridge should not prevent it from starting.
   const connection = new Connection(config, () => session.credentials(), notify)
+
+  // Attachments saved to disk, one store for the whole process. Starting it
+  // clears up what a server that was killed left behind; stopping it, below,
+  // deletes what this one saved. The exit handler is the fallback for an exit
+  // that does not pass through shutdown.
+  const saved = new SavedAttachments({ root: config.attachmentDir })
+  saved.start()
+  process.on('exit', () => saved.stop())
 
   /**
    * Tries credentials against the Bridge before they are trusted.
@@ -343,6 +353,7 @@ async function main(): Promise<void> {
     registerUpdateTool(server, VERSION)
     registerListFolders(server, connection)
     registerMessageTools(server, connection)
+    registerSavedAttachmentTools(server, connection, saved)
     // Read as a function rather than a value: whether the server may write is a
     // property of the configuration, and the tools should ask at call time.
     registerLabelTools(server, connection, () => config.readOnly)
@@ -395,6 +406,7 @@ async function main(): Promise<void> {
     if (!idle) notify('shutdown forced, a call was still running.')
 
     try {
+      saved.stop()
       await web.stop()
       await connection.close()
       await handle.close()
