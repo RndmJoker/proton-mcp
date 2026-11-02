@@ -96,7 +96,7 @@ These limits come from the Bridge itself and cannot be worked around:
 ## Requirements
 
 - **A paid Proton plan.** The Bridge is not included in the free tier.
-- **Proton Mail Bridge**, installed, running and unlocked. The official application expects a desktop. On a machine without one, [proton-mail-bridge-docker](https://github.com/RndmJoker/proton-mail-bridge-docker) runs it in a container instead. That is a way to get a bridge, not a way to put one somewhere else: it decrypts your mail wherever it runs, so a bridge on another machine means your mail is decrypted on that machine. The section above still applies, and the container's own readme says the same.
+- **Proton Mail Bridge**, installed, running and unlocked. Tried against versions 3.25.0 and 3.27.1. The official application expects a desktop. On a machine without one, [proton-mail-bridge-docker](https://github.com/RndmJoker/proton-mail-bridge-docker) runs it in a container instead. That is a way to get a bridge, not a way to put one somewhere else: it decrypts your mail wherever it runs, so a bridge on another machine means your mail is decrypted on that machine. The section above still applies, and the container's own readme says the same.
 - **Node.js 24 or newer.**
 - **The Bridge password**, which is not your Proton account password. The Bridge generates one per account. You find it in the Bridge application under the account, or in a terminal via `protonmail-bridge --cli` and then `info`.
 
@@ -204,7 +204,11 @@ Then it asks where the password should be kept. All four options are supported a
 
 The interface probes the keyring at runtime rather than guessing from the operating system, because the same Linux with and without a graphical session is a different machine as far as a keyring is concerned. An option that cannot work is shown greyed out with the actual reason.
 
+On Linux the system keyring is the desktop's, GNOME Keyring or KWallet, reached over D-Bus. MCP clients usually start a server without the address of that bus, so the server looks for it in the usual place itself. Where there is no desktop session, on a server or in a container, the keyring library uses the kernel's keyring instead. That one keeps the password in memory only: it is gone after a restart, and after three days without use by default. The sign-in page says so when that is the case.
+
 If you pick the encrypted file, every later start shows an unlock page asking for that master password alone. Forget it and nothing anywhere can recover the file; the page offers to throw it away so you can sign in afresh.
+
+**Signing in again replaces what was stored.** The password then lives only where you chose last, and every other place is emptied. **Signing out empties all four.** If one of them cannot be emptied, a file the server may not delete for instance, the page says which and how to remove it by hand, because until then the next start signs in with it again.
 
 #### Without a browser
 
@@ -330,7 +334,7 @@ Only these, all under `~/.config/proton-mcp/` (on Windows `%USERPROFILE%\.config
 | `known-certificate.json` | On the first connection | The Bridge's certificate and its fingerprint |
 | `settings.json` | When you change the ports or dismiss the notice in the interface | The two Bridge ports, and whether the notice that this is not an official Proton tool was dismissed |
 | `credentials.enc` | Only if you chose the encrypted file | Your Bridge password, encrypted with your master password |
-| `env` | Only if you put it there yourself | Your Bridge password in plain text |
+| `env` | Only if you chose the plain file, or put it there yourself | Your Bridge password in plain text |
 | `saved-attachments/` | While attachments are saved | Which files this server saved, so it can delete exactly those again. No content |
 
 Choosing the system keyring puts the password where the operating system keeps your other passwords, and nothing of it in a file. Choosing "this session only" writes nothing at all.
@@ -346,7 +350,7 @@ Choosing the system keyring puts the password where the operating system keeps y
 - **The sender's file name is reduced to a plain one**, without path separators, control or formatting characters, a leading dot or a device name Windows reserves.
 - **An existing file is never replaced**, a link in its place is never followed, and every file is readable by your account alone.
 - **Gone within the hour.** A saved file is deleted one hour after saving and when the server stops. A server that was killed leaves its files to the next one that starts. The assistant is told so, and copies a file it needs for longer.
-- **Only what it saved.** The server records which files it wrote and deletes a file only while it is still that file, so whatever else is in the directory is never touched.
+- **Only what it saved.** The server records which files it wrote and deletes a file only while it is still that file, so whatever else is in the directory is never touched. A folder it created for a file goes again once it is empty; a folder that was there before stays.
 - **At most 25 MB**, which is what Proton accepts per message anyway.
 
 To switch it on, add the variable to the server's entry in your client's configuration:
