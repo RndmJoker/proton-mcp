@@ -137,8 +137,8 @@ export function quotedPrintable(text: string): string {
  *
  * The Bridge compares the raw bytes of a message, lower cased, so a word with a
  * letter outside ASCII is found only where a part carries it unencoded. Most
- * text with umlauts travels as quoted-printable, where "Brueckenpfeiler" spelled
- * with u-umlaut reads "Br=C3=BCckenpfeiler". Lower casing does not reach into
+ * text with umlauts travels as quoted-printable, where a u with umlaut is the
+ * six characters "=C3=BC" and an a with umlaut "=C3=A4". Lower casing does not reach into
  * that encoding, so the usual spellings of a word are each asked for: as given,
  * in lower case, and capitalised. Forms that differ only in the case of ASCII
  * letters are asked once, since the Bridge lower cases both sides. A word
