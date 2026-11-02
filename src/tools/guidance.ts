@@ -169,11 +169,26 @@ conversation. A reply handed straight to SMTP keeps its \`In-Reply-To\` and stay
 in the thread. If threading matters, use \`send_reply\` rather than
 \`reply_draft\` followed by \`send_draft\`.
 
+## Stored drafts
+
+Markup is checked when a draft is written, at the level given then. Once it is
+stored, your part and a quote can no longer be told apart, and the level is not
+recorded anywhere, so \`send_draft\` sends a draft exactly as it was stored and
+does not check its markup again. A draft written at \`extended\` needs no level
+restated, and a formatted reply goes out with its quote.
+
+- The confirmation still reads all of it: every address, every hidden text, and
+  the same warning as \`extended\` whenever the draft carries more than
+  \`standard\` would have let through.
+- Files stored with a draft go out with it, a forwarded original among them.
+- \`update_draft\` keeps those files whatever happens to the body. Giving
+  neither \`text\` nor \`html\` keeps the stored body exactly as it is.
+
 ## Attachments
 
-A message cannot be given a file from this machine. That is a decision that has
-not been made rather than a feature that is missing: which paths a model may
-reach is its own question.
+A message cannot be given a file from this machine yet. A version that reads
+only from a directory the user has set up is planned; until then, which paths a
+model may reach is not something this server decides on its own.
 
 **This does not stop a message from showing images.** An image at a web address
 needs no attachment at all, and that is how almost every formatted message does

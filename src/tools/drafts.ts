@@ -155,7 +155,9 @@ export function registerDraftTools(
       title: 'Change a draft',
       description:
         'Replaces a draft with a changed version, keeping the same id. Fields that are not given ' +
-        'are carried over, including the blind copies, which drafts written here keep. Only ' +
+        'are carried over, including the blind copies, which drafts written here keep. Files ' +
+        'stored with the draft, a forwarded original among them, stay with it whatever happens ' +
+        'to the body, and giving neither text nor html keeps the stored body exactly as it is. Only ' +
         'messages in the Drafts mailbox that carry the draft flag can be changed this way. ' +
         PLAIN_TEXT_NOTE + ' ' + MARKUP_NOTE + ' ' + UTF8_NOTE,
       inputSchema: z.object({

@@ -27,14 +27,14 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `set_flags` | Marks read or unread and sets or clears the star |
 | `trash_messages` | Moves messages to the trash, which is what deletion means here |
 | `create_draft` | Writes a draft. Nothing is sent |
-| `update_draft` | Replaces a draft, keeping its id |
+| `update_draft` | Replaces a draft, keeping its id and the files stored with it |
 | `reply_draft` | Prepares a reply as a draft, with the original quoted |
 | `forward_draft` | Prepares a forward as a draft, attachments and all |
 | `list_drafts` | The drafts, newest first |
 | `send_message` | Composes and sends. Asks you first, always |
 | `send_reply` | Replies and sends, keeping the conversation intact |
 | `send_forward` | Forwards and sends, attachments and all |
-| `send_draft` | Sends a draft that is already written |
+| `send_draft` | Sends a draft that is already written, exactly as it was stored |
 | `open_configuration` | Hands back the address of the local web interface, with the token that opens it |
 | `check_for_updates` | Asks npm whether a newer version exists. The only thing here that contacts anything but your own machine, and only when called |
 
@@ -290,7 +290,9 @@ Formatting changes what a confirmation has to show, and that is the interesting 
 
 What no level permits is `style` blocks, `script`, event handlers, `data:` addresses and comments. Comments look inert and are not: Outlook runs conditional ones, so a `<style>` block inside a comment reaches those recipients as markup while the confirmation and the preview see a comment. Addresses are checked wherever they appear, a CSS `background: url(...)` included, and every one of them is listed on the preview page. The line runs between describing a document and running inside it or reaching out of it: a `<style>` in the quote of a reply restyles the answer written above it, and 66 percent of real formatted mail carries one. Attachments from files on this machine are not supported today: a path named by a model, read by the server and carried out by the next confirmation would be a way out for anything on your disk. [#17](https://github.com/RndmJoker/proton-mcp/issues/17) tracks a version that reads only from a directory you have set yourself, and stays off until you do. Forwarding loses nothing all the same, because the original message travels along whole, embedded images included.
 
-One thing worth knowing about drafts: Proton rewrites the thread headers of anything it stores. A reply is built with `In-Reply-To` and `References`, and what comes back has neither, only Proton's own internal thread id. Threading a stored draft is therefore Proton's business rather than this server's.
+A stored draft is sent exactly as it was stored, its files and a forwarded original included. Its markup is checked when the draft is written, not again when it is sent: once stored, the part somebody wrote and the quote below it can no longer be told apart, and checked again a formatted reply would fail on the `<style>` of its quote. Nothing is waved through unseen for that. The preview page lists every address, every hidden text and everything a newly written message could not contain, and the confirmation carries the same warning as `extended` whenever the draft holds more than `standard` would have let through. `update_draft` keeps a draft's files whatever happens to its body.
+
+One more thing worth knowing about drafts: Proton rewrites the thread headers of anything it stores. A reply is built with `In-Reply-To` and `References`, and what comes back has neither, only Proton's own internal thread id. Threading a stored draft is therefore Proton's business rather than this server's.
 
 Writes need a moment to settle. A move takes roughly fifteen seconds to reconcile with Proton, and until then the Bridge lists the message in both places, so the tools say so rather than reading back an intermediate state and calling it the result. Flags are the exception: those hold immediately.
 
@@ -395,7 +397,7 @@ src/
 ├── bridge/       connection handling, certificate pinning, error translation
 ├── credentials/  the four places a password can be kept, and the runtime probe
 ├── mail/         listing, reading, searching, identifiers, attachments
-├── mime/         parsing, HTML to text, budgeting
+├── mime/         parsing, HTML to text, budgeting, the parts of a stored draft
 ├── tools/        the MCP tools and their output formatting
 ├── web/          the local interface and its security layer
 ├── activity.ts   what is running and what ran, in memory only
