@@ -31,7 +31,7 @@ import { track } from '../in-flight.js'
 const ok = (text: string): CallToolResult => ({ content: [{ type: 'text', text }] })
 
 /** Written into every answer that created or changed a draft. */
-function describeDraft(draft: DraftResult, what: string): string {
+export function describeDraft(draft: DraftResult, what: string): string {
   const lines = [
     `${what} in "${DRAFTS}".`,
     '',
@@ -39,12 +39,18 @@ function describeDraft(draft: DraftResult, what: string): string {
     describeRecipients(draft),
     `Id: ${draft.messageId}`,
   ]
-  if (draft.carriedAttachments?.length) {
+  if (draft.attachedOriginal) {
+    // The attached file and the attachments inside it, named apart. Up to
+    // 0.4.11 this said "The original carried 1 attachment(s)" and named the
+    // file this server had added, so an assistant reported one attachment
+    // where the original held several.
+    const { filename, carries } = draft.attachedOriginal
     lines.push(
       '',
-      `The original carried ${draft.carriedAttachments.length} attachment(s): ` +
-        `${draft.carriedAttachments.join(', ')}. The whole original message is attached to the ` +
-        'draft, so nothing of it is lost.',
+      `The original is attached as one file, ${filename}, so nothing of it is lost.` +
+        (carries.length
+          ? ` Inside it travel its own ${carries.length} attachment(s): ${carries.join(', ')}.`
+          : ''),
     )
   }
   if (draft.keptFiles?.length) {

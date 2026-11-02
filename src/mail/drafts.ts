@@ -46,6 +46,7 @@ import { normaliseMessageId, findByMessageId } from './ids.js'
 import { getMessage, listMessages, type ListResult } from './messages.js'
 import { htmlToText, parseMessage, type ParsedMessage } from '../mime/parse.js'
 import { readParts, type StoredParts } from '../mime/parts.js'
+import { forwardedFileName } from '../mime/filenames.js'
 import type { MarkupLevel } from './markup.js'
 import {
   allRecipients,
@@ -123,8 +124,14 @@ export interface DraftResult {
   bcc: Recipient[]
   /** Its uid in "Drafts". Valid until the draft is replaced. */
   uid: number
-  /** Set when a whole message was carried along, as with a forward. */
-  carriedAttachments?: string[]
+  /**
+   * Set when a whole message was carried along, as with a forward.
+   *
+   * Two things, kept apart because they were confused up to 0.4.11: the one
+   * file this server attached, and the attachments travelling inside it. The
+   * answer used to name the first as if it were the second.
+   */
+  attachedOriginal?: { filename: string; carries: string[] }
   /** Files that were stored with the draft and stay with it. */
   keptFiles?: string[]
 }
@@ -593,8 +600,9 @@ export async function buildForwardDraft(
     })
     if (source) {
       draft.attachedMessage = {
-        filename: `${(original.subject || 'message').replace(/[^\w. -]/g, '_').slice(0, 60)}.eml`,
+        filename: forwardedFileName(original.subject),
         raw: source,
+        carries: original.attachments.map((attachment) => attachment.filename),
       }
     }
   }
@@ -616,7 +624,13 @@ export async function forwardDraft(
   const draft = await buildForwardDraft(connection, fromAddress, messageId, to, text, options)
   const stored = await store(connection, draft)
   return draft.attachedMessage
-    ? { ...stored, carriedAttachments: [draft.attachedMessage.filename] }
+    ? {
+        ...stored,
+        attachedOriginal: {
+          filename: draft.attachedMessage.filename,
+          carries: draft.attachedMessage.carries ?? [],
+        },
+      }
     : stored
 }
 

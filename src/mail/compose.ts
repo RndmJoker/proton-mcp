@@ -59,8 +59,13 @@ export interface Draft {
    * replayed for the unwarned one.
    */
   markupLevel?: MarkupLevel
-  /** A whole message carried along, used when forwarding. */
-  attachedMessage?: { filename: string; raw: Buffer }
+  /**
+   * A whole message carried along, used when forwarding.
+   *
+   * `carries` names the attachments travelling inside it. Only for telling the
+   * assistant what the original held; the bytes are in `raw`.
+   */
+  attachedMessage?: { filename: string; raw: Buffer; carries?: string[] }
   /**
    * The message as markup, when it has any.
    *

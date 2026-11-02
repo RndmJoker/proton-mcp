@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import MailComposer from 'nodemailer/lib/mail-composer/index.js'
 import {
   createDraft,
   updateDraft,
@@ -317,6 +318,31 @@ describe('forwardDraft', () => {
     const written = recorded.appends[0]?.raw ?? ''
     expect(written).toContain('Forwarded message')
     expect(written).toContain('For your information')
+  })
+
+  it('names the attached original after its subject and lists what travels inside it', async () => {
+    // Built with the real nodemailer, so the attachment names arrive encoded
+    // the way a mail client sends them.
+    const source = await new MailComposer({
+      from: 'Jane Doe <jane@example.com>',
+      to: ME,
+      subject: 'Bericht \u00fcber Br\u00fccken',
+      messageId: '<original@example.com>',
+      date: new Date('2026-07-31T09:00:00Z'),
+      text: 'See the files.',
+      attachments: [
+        { filename: 'daten.json', content: '{}', contentType: 'application/json' },
+        { filename: 'notiz-\u00fcber-br\u00fccken.txt', content: 'x', contentType: 'text/plain' },
+      ],
+    })
+      .compile()
+      .build()
+    const { connection } = fakeConnection({ source: source.toString('utf8') })
+    const draft = await forwardDraft(connection, false, ME, '<original@example.com>', ['third@example.com'], '')
+    expect(draft.attachedOriginal).toEqual({
+      filename: 'Bericht \u00fcber Br\u00fccken.eml',
+      carries: ['daten.json', 'notiz-\u00fcber-br\u00fccken.txt'],
+    })
   })
 
   it('does not carry the thread headers of the original', async () => {
