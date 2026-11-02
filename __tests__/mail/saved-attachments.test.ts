@@ -90,8 +90,12 @@ describe('where a file may go', () => {
   })
 
   it('reduces the name the sender chose to a plain one', () => {
-    const saved = store().save('../../evil.sh', CONTENT, 'text/x-sh')
-    expect(saved.path.startsWith(`${root}/`)).toBe(true)
+    // Three levels down, so that even a name that did climb out would still
+    // land inside this test's own directory and be cleared away with it.
+    const deep = join(base, 'a', 'b', 'root')
+    mkdirSync(deep, { recursive: true })
+    const saved = store({ root: deep }).save('../../evil.sh', CONTENT, 'text/x-sh')
+    expect(saved.path.startsWith(`${deep}/`)).toBe(true)
     expect(saved.path).not.toContain('/../')
   })
 })
