@@ -409,6 +409,12 @@ describe('a stored draft is sent unchecked, but not unread', () => {
     ).not.toBe(digestOf(one))
   })
 
+  it('binds the yes to the contents of a forwarded message, not only to its name', () => {
+    const forward = (raw: string): Draft =>
+      draft({ attachedMessage: { filename: 'Report.eml', raw: Buffer.from(raw) } })
+    expect(digestOf(forward('Subject: a\r\n\r\nfirst'))).not.toBe(digestOf(forward('Subject: a\r\n\r\nsecond')))
+  })
+
   it('lists on the preview what it carries unchecked', () => {
     const page = previewFor(stored('<style>p { color: red }</style><p>Hello</p>'), 'send_draft')
     expect(page).toContain('Sent as it was stored')

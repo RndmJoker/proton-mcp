@@ -106,7 +106,11 @@ export function digestOf(draft: Draft): string {
     // the case; now it is.
     markupLevel: draft.markupLevel ?? null,
     inReplyTo: draft.inReplyTo ?? null,
-    attached: draft.attachedMessage?.filename ?? null,
+    // Name and contents, for the same reason as the parts below. Up to 0.4.11
+    // only the name was covered.
+    attached: draft.attachedMessage
+      ? `${draft.attachedMessage.filename}:${fingerprintPart(draft.attachedMessage.raw)}`
+      : null,
     // The body of a stored draft, which is sent unchecked, and so has to be
     // exactly the body that was agreed to.
     stored: draft.storedHtml ?? null,
