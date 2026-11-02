@@ -25,6 +25,8 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `search_messages` | Full text, subject, sender, recipient, date range, read state, star, size. Dates are the sender's, matching what the results show. Subject, sender and recipient match umlauts and spaces as written. Full text cannot reach attachments or parts sent as base64, and the answer says so |
 | `get_message` | One message as readable text, HTML converted, budgeted |
 | `get_attachment` | One attachment by index, textual types only |
+| `save_attachment` | Saves one attachment as a file into the directory you set in `PROTON_MCP_ATTACHMENT_DIR`, so the assistant can open it. Deleted again after an hour and when the server stops, see [Saved attachments](#saved-attachments) |
+| `delete_saved_attachments` | Deletes files `save_attachment` wrote, all of them or the ones named, and nothing else |
 | `add_label` | Applies an existing label. The message stays in its folder |
 | `remove_label` | Removes a label. Folder, other labels and the message itself are untouched |
 | `move_messages` | Moves messages into a folder. Labels survive the move |
@@ -79,7 +81,7 @@ This table says what the server cannot do today. The issue behind each entry say
 | Choosing in the interface how much markup a message may carry. The levels exist and a caller picks one per message; what is missing is a ceiling the caller cannot raise | [#24](https://github.com/RndmJoker/proton-mcp/issues/24) |
 | A fixed extra recipient the assistant cannot remove | [#18](https://github.com/RndmJoker/proton-mcp/issues/18) |
 
-**Binary attachments** are missing from that table on purpose. They are not an unfinished feature waiting for its turn: `get_attachment` refuses anything that is not text and says why. Handing one over would mean either base64 in the context window, which is unusable, or writing decrypted content to your disk, which this server does not do. Changing that needs a decision first, not an implementation, so there is nothing to track yet.
+**Binary attachments** are not returned as text: base64 in the context window would be unusable. `save_attachment` writes one to a directory you name instead, and it is off until you name one, see [Saved attachments](#saved-attachments).
 
 ### What will never exist
 
@@ -267,7 +269,7 @@ The content of someone else's email is text written by strangers, and it is hand
 - **Sending always requires your confirmation**, enforced in the server rather than in a system prompt. There is no switch to turn it off, and a client that cannot ask the question cannot send.
 - **There will be no permanent deletion**, and no tools for filters, forwarding, account or key settings. A hijacked session must not be able to leave behind lasting access.
 - **HTML is never passed through raw** and external content is never fetched. Tracking pixels stay ineffective.
-- **No message ever touches your disk.** No cache, no index, no copies. Anything this server wrote down would be your mail in plain text, outside the encryption you pay Proton for.
+- **Your mail is not kept on your disk.** No cache, no index, no copies. Anything this server wrote down would be your mail in plain text, outside the encryption you pay Proton for. The one exception is an attachment you have the assistant save, into a directory you chose, for an hour at most, see [Saved attachments](#saved-attachments).
 
 ### Writing to your mailbox
 
@@ -329,10 +331,39 @@ Only these, all under `~/.config/proton-mcp/` (on Windows `%USERPROFILE%\.config
 | `settings.json` | When you change the ports or dismiss the notice in the interface | The two Bridge ports, and whether the notice that this is not an official Proton tool was dismissed |
 | `credentials.enc` | Only if you chose the encrypted file | Your Bridge password, encrypted with your master password |
 | `env` | Only if you put it there yourself | Your Bridge password in plain text |
+| `saved-attachments/` | While attachments are saved | Which files this server saved, so it can delete exactly those again. No content |
 
 Choosing the system keyring puts the password where the operating system keeps your other passwords, and nothing of it in a file. Choosing "this session only" writes nothing at all.
 
 **No mail, no subjects, no sender addresses, no folder names, no search terms.** The activity list in the interface records tool names and timings, in memory only, and is gone when the server stops.
+
+### Saved attachments
+
+`save_attachment` writes an attachment to your disk so that the assistant can open it, a PDF or a spreadsheet for instance. That is your mail decrypted, so it is bounded on every side:
+
+- **Off until you name a directory** in `PROTON_MCP_ATTACHMENT_DIR`, and only there or in a folder inside it. The tool is still listed, and without the directory its answer says what to set. The variable is read from the environment only; the web interface cannot set it, because an assistant can reach that page.
+- **Nothing outside it.** A folder is checked after it is resolved; `..` and a symbolic link on the way are refused.
+- **The sender's file name is reduced to a plain one**, without path separators, control or formatting characters, a leading dot or a device name Windows reserves.
+- **An existing file is never replaced**, a link in its place is never followed, and every file is readable by your account alone.
+- **Gone within the hour.** A saved file is deleted one hour after saving and when the server stops. A server that was killed leaves its files to the next one that starts. The assistant is told so, and copies a file it needs for longer.
+- **Only what it saved.** The server records which files it wrote and deletes a file only while it is still that file, so whatever else is in the directory is never touched.
+- **At most 25 MB**, which is what Proton accepts per message anyway.
+
+To switch it on, add the variable to the server's entry in your client's configuration:
+
+```json
+{
+  "mcpServers": {
+    "proton": {
+      "command": "node",
+      "args": ["/absolute/path/to/proton-mcp/dist/server.js"],
+      "env": { "PROTON_MCP_ATTACHMENT_DIR": "/absolute/path/to/a/directory" }
+    }
+  }
+}
+```
+
+The directory has to exist; it is not created for you, so that a mistyped path does not become a new place for mail to land.
 
 ### The web interface
 
