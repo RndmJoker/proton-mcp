@@ -233,3 +233,93 @@ describe('clearing up on its own', () => {
     expect(existsSync(saved.path)).toBe(false)
   })
 })
+
+describe('the folders it creates', () => {
+  // A folder's name can say what was in it, so one made for a file goes again
+  // with the file. Decided by Tobi on 2026-11-02, after empty folders were seen
+  // standing in the directory.
+
+  it('removes the folders it created once their file is gone, deepest first', () => {
+    const s = store()
+    s.save('a.pdf', CONTENT, 'application/pdf', 'tax/2026')
+    const report = s.delete()
+    expect(report.folders).toEqual([join(root, 'tax', '2026'), join(root, 'tax')])
+    expect(existsSync(join(root, 'tax'))).toBe(false)
+    expect(existsSync(root)).toBe(true)
+  })
+
+  it('does the same when the hour is up', () => {
+    vi.useFakeTimers()
+    const s = store()
+    s.save('a.pdf', CONTENT, 'application/pdf', 'tax')
+    vi.advanceTimersByTime(KEEP_MS)
+    expect(existsSync(join(root, 'tax'))).toBe(false)
+  })
+
+  it('leaves a folder that was there before', () => {
+    mkdirSync(join(root, 'existing'))
+    const s = store()
+    s.save('a.pdf', CONTENT, 'application/pdf', 'existing/new')
+    expect(s.delete().folders).toEqual([join(root, 'existing', 'new')])
+    expect(existsSync(join(root, 'existing'))).toBe(true)
+  })
+
+  it('leaves a folder holding something it did not save, and takes it once that is gone', () => {
+    const s = store()
+    s.save('a.pdf', CONTENT, 'application/pdf', 'shared')
+    const foreign = join(root, 'shared', 'mine.txt')
+    writeFileSync(foreign, 'not yours')
+    expect(s.delete().folders).toEqual([])
+    expect(readFileSync(foreign, 'utf8')).toBe('not yours')
+    rmSync(foreign)
+    s.stop()
+    expect(existsSync(join(root, 'shared'))).toBe(false)
+  })
+
+  it('leaves a folder that was replaced by another of the same name', () => {
+    const s = store()
+    const saved = s.save('a.pdf', CONTENT, 'application/pdf', 'swapped')
+    rmSync(saved.path)
+    rmSync(join(root, 'swapped'), { recursive: true })
+    mkdirSync(join(root, 'swapped'))
+    expect(s.delete().folders).toEqual([])
+    expect(existsSync(join(root, 'swapped'))).toBe(true)
+  })
+
+  it('never follows a link standing in the place of its folder', () => {
+    const s = store()
+    const saved = s.save('a.pdf', CONTENT, 'application/pdf', 'linked')
+    rmSync(saved.path)
+    rmSync(join(root, 'linked'), { recursive: true })
+    symlinkSync(outside, join(root, 'linked'))
+    expect(s.delete().folders).toEqual([])
+    expect(existsSync(outside)).toBe(true)
+    expect(existsSync(join(root, 'linked'))).toBe(true)
+  })
+
+  it('removes a folder made for a file that could not be saved', () => {
+    // The second level is too long a name, so it fails after the first exists.
+    const s = store()
+    expect(() => s.save('a.pdf', CONTENT, 'application/pdf', `made/${'x'.repeat(300)}`)).toThrow()
+    expect(existsSync(join(root, 'made'))).toBe(false)
+    expect(existsSync(records) ? readdirSync(records) : []).toEqual([])
+  })
+
+  it('removes the folders of a server that no longer runs', () => {
+    const killed = store({ pid: 4242, isAlive: () => false })
+    killed.save('a.pdf', CONTENT, 'application/pdf', 'left/behind')
+    store({ pid: 4343, isAlive: () => false }).start()
+    expect(existsSync(join(root, 'left'))).toBe(false)
+    expect(readdirSync(records)).toEqual([])
+  })
+
+  it('leaves the folders of a server that still runs to that server', () => {
+    const start = Date.parse('2026-11-02T12:00:00Z')
+    const running = store({ pid: 4242, isAlive: () => true, now: () => start })
+    running.save('a.pdf', CONTENT, 'application/pdf', 'busy')
+    store({ pid: 4343, isAlive: () => true, now: () => start + KEEP_MS + 11 * 60_000 }).start()
+    // Its file was well past its hour and went, its folder stays with it.
+    expect(readdirSync(join(root, 'busy'))).toEqual([])
+    expect(running.delete().folders).toEqual([join(root, 'busy')])
+  })
+})

@@ -27,6 +27,11 @@
  * that was saved: the same inode, size and modification time, a plain file and
  * not a link. A file replaced or changed since is left where it is, because in
  * the directory there may be files that are not ours.
+ *
+ * A folder created for a file goes again once it is empty, decided by Tobi on
+ * 2026-11-02: its name can say what was in it. Recorded like the files, with
+ * its inode, and removed with rmdir, which takes an empty folder and nothing
+ * else. A folder that was there before is never recorded and never removed.
  */
 
 import { createHash } from 'node:crypto'
@@ -41,6 +46,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -80,10 +86,19 @@ export interface SavedEntry {
   expiresAt: string
 }
 
+/** A folder this server created, with what identifies it as that folder. */
+export interface CreatedFolder {
+  path: string
+  dev: number
+  ino: number
+}
+
 interface SaveRecord {
   pid: number
   startedAt: string
   entries: SavedEntry[]
+  /** Folders created for those files. Absent from records written before 2026-11-02. */
+  folders?: CreatedFolder[]
 }
 
 /** What save hands back. */
@@ -104,6 +119,8 @@ export interface DeleteReport {
   missing: string[]
   /** Not a file this server saved, so not touched. */
   unknown: string[]
+  /** Folders this server had created and removed again, because they were empty. */
+  folders: string[]
 }
 
 export interface SavedAttachmentsOptions {
@@ -157,6 +174,38 @@ function deleteIfSame(entry: SavedEntry): 'deleted' | 'left' | 'missing' {
   return 'deleted'
 }
 
+/**
+ * Removes the folders this server created that are empty now, deepest first,
+ * so that a parent can follow its child.
+ *
+ * rmdir and nothing stronger: whatever someone put into a folder keeps it
+ * standing. And only while it is still the folder that was created, the same
+ * inode, never a link in its place. Returns what went and what is left to
+ * watch; a folder that is gone or no longer ours is neither.
+ */
+function pruneFolders(folders: readonly CreatedFolder[]): { removed: string[]; kept: CreatedFolder[] } {
+  const removed: string[] = []
+  const kept: CreatedFolder[] = []
+  const deepestFirst = [...folders].sort((a, b) => b.path.split(sep).length - a.path.split(sep).length)
+  for (const folder of deepestFirst) {
+    let info
+    try {
+      info = lstatSync(folder.path)
+    } catch {
+      continue
+    }
+    if (!info.isDirectory() || info.dev !== folder.dev || info.ino !== folder.ino) continue
+    try {
+      rmdirSync(folder.path)
+      removed.push(folder.path)
+    } catch {
+      // Not empty, or not removable: watched until this server stops.
+      kept.push(folder)
+    }
+  }
+  return { removed, kept }
+}
+
 export class SavedAttachments {
   readonly #root: string | undefined
   readonly #recordDir: string
@@ -166,6 +215,7 @@ export class SavedAttachments {
   readonly #startedAt: string
   readonly #timers = new Map<string, NodeJS.Timeout>()
   #entries: SavedEntry[] = []
+  #folders: CreatedFolder[] = []
 
   constructor(options: SavedAttachmentsOptions) {
     this.#root = options.root?.trim() || undefined
@@ -255,6 +305,8 @@ export class SavedAttachments {
         info = lstatSync(current)
       } catch {
         mkdirSync(current, { mode: 0o700 })
+        const made = lstatSync(current)
+        this.#folders.push({ path: current, dev: made.dev, ino: made.ino })
         continue
       }
       if (info.isSymbolicLink()) {
@@ -267,12 +319,17 @@ export class SavedAttachments {
 
   /** Writes the record of this process, atomically, or removes it once empty. */
   #writeRecord(): void {
-    if (this.#entries.length === 0) {
+    if (this.#entries.length === 0 && this.#folders.length === 0) {
       rmSync(this.#recordPath, { force: true })
       return
     }
     mkdirSync(this.#recordDir, { recursive: true, mode: 0o700 })
-    const record: SaveRecord = { pid: this.#pid, startedAt: this.#startedAt, entries: this.#entries }
+    const record: SaveRecord = {
+      pid: this.#pid,
+      startedAt: this.#startedAt,
+      entries: this.#entries,
+      folders: this.#folders,
+    }
     const temporary = `${this.#recordPath}.tmp`
     writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
     renameSync(temporary, this.#recordPath)
@@ -288,6 +345,16 @@ export class SavedAttachments {
         `The attachment is ${content.length} bytes, more than the ${MAX_SAVE_BYTES} this server saves.`,
       )
     }
+    try {
+      return this.#write(name, content, contentType, folder)
+    } catch (error) {
+      // A folder made for a file that never arrived is not left behind.
+      this.#settleFolders()
+      throw error
+    }
+  }
+
+  #write(name: string, content: Buffer, contentType: string, folder: string | undefined): SavedFile {
     const directory = this.#targetDir(folder)
     const plain = plainFileName(name, 'attachment')
     const { name: stem, ext } = parsePath(plain)
@@ -350,7 +417,15 @@ export class SavedAttachments {
     if (!entry) return
     deleteIfSame(entry)
     this.#entries = this.#entries.filter((e) => e !== entry)
+    this.#settleFolders()
+  }
+
+  /** Removes the empty ones among the folders created here, and writes the record. */
+  #settleFolders(): string[] {
+    const { removed, kept } = pruneFolders(this.#folders)
+    this.#folders = kept
     this.#writeRecord()
+    return removed
   }
 
   /** The record a path stands for, read the way save wrote it. */
@@ -373,7 +448,7 @@ export class SavedAttachments {
    * A path it did not save is not touched, whatever it is.
    */
   delete(paths?: string[]): DeleteReport {
-    const report: DeleteReport = { deleted: [], left: [], missing: [], unknown: [] }
+    const report: DeleteReport = { deleted: [], left: [], missing: [], unknown: [], folders: [] }
     const chosen: SavedEntry[] = []
     if (paths === undefined) {
       chosen.push(...this.#entries)
@@ -391,7 +466,7 @@ export class SavedAttachments {
       this.#timers.delete(entry.path)
     }
     this.#entries = this.#entries.filter((e) => !chosen.includes(e))
-    this.#writeRecord()
+    report.folders = this.#settleFolders()
     return report
   }
 
@@ -423,6 +498,9 @@ export class SavedAttachments {
         if (dead || stale) deleteIfSame(entry)
         else keep.push(entry)
       }
+      // The folders of a server that still runs stay its own business: it may
+      // be about to save into one of them.
+      if (dead) pruneFolders(record.folders ?? [])
       if (keep.length === 0) {
         rmSync(path, { force: true })
       } else if (keep.length !== (record.entries ?? []).length) {
@@ -442,7 +520,7 @@ export class SavedAttachments {
   stop(): void {
     for (const timer of this.#timers.values()) clearTimeout(timer)
     this.#timers.clear()
-    if (this.#entries.length) this.delete()
+    if (this.#entries.length || this.#folders.length) this.delete()
     rmSync(this.#recordPath, { force: true })
   }
 

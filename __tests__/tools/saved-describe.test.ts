@@ -41,14 +41,18 @@ describe('describeDeleted', () => {
       left: ['/d/b.pdf'],
       missing: ['/d/c.pdf'],
       unknown: ['/d/mine.txt'],
+      folders: ['/d/report'],
     })
     expect(text).toMatch(/Deleted 1 file\(s\):\n {2}\/d\/a\.pdf/)
     expect(text).toMatch(/left in place:\n {2}\/d\/b\.pdf/)
     expect(text).toMatch(/Already gone:\n {2}\/d\/c\.pdf/)
     expect(text).toMatch(/Not saved by this server, so not touched:\n {2}\/d\/mine\.txt/)
+    expect(text).toMatch(/Removed 1 empty folder\(s\) this server had created:\n {2}\/d\/report/)
   })
 
   it('says so when there is nothing to delete', () => {
-    expect(describeDeleted({ deleted: [], left: [], missing: [], unknown: [] })).toMatch(/no saved attachments/)
+    expect(describeDeleted({ deleted: [], left: [], missing: [], unknown: [], folders: [] })).toMatch(
+      /no saved attachments/,
+    )
   })
 })

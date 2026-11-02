@@ -52,6 +52,7 @@ export function describeDeleted(report: DeleteReport): string {
   list('Changed or replaced since they were saved, so left in place:', report.left)
   list('Already gone:', report.missing)
   list('Not saved by this server, so not touched:', report.unknown)
+  list(`Removed ${report.folders.length} empty folder(s) this server had created:`, report.folders)
   return lines.length ? lines.join('\n') : 'This server has no saved attachments to delete.'
 }
 
@@ -86,7 +87,8 @@ export function registerSavedAttachmentTools(
           .optional()
           .describe(
             'Optional: a folder inside the configured directory, absolute or relative to it, ' +
-              'created if missing. Anything outside the directory is refused.',
+              'created if missing and removed again once the files saved into it are gone. ' +
+              'Anything outside the directory is refused.',
           ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
