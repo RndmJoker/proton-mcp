@@ -13,6 +13,7 @@
 
 import type { CredentialStore, Credentials } from './store.js'
 import { BridgeError } from '../bridge/errors.js'
+import { prepareSessionBus } from './session-bus.js'
 
 /** Identifies our entries in the keyring. */
 export const SERVICE_NAME = 'proton-mcp'
@@ -40,6 +41,9 @@ let cached: KeyringModule | undefined | null = undefined
  */
 export async function loadKeyringModule(): Promise<KeyringModule | undefined> {
   if (cached !== undefined) return cached ?? undefined
+  // Before the import: the library decides by the environment which store it
+  // uses, see session-bus.ts.
+  prepareSessionBus()
   try {
     const module = (await import('@napi-rs/keyring')) as unknown as KeyringModule
     cached = module

@@ -62,6 +62,7 @@ function storeOption(store: StoreAvailability, suggested: boolean, chosen: boole
     <p class="con">${escapeHtml(store.cost)}</p>
     <p class="who">${escapeHtml(store.bestFor)}</p>
     ${store.reason ? `<p class="blocked">${escapeHtml(store.reason)}</p>` : ''}
+    ${store.note ? `<p class="here">${escapeHtml(store.note)}</p>` : ''}
   </div>
 </label>`
 }
