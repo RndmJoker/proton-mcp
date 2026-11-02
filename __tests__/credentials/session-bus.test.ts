@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { KERNEL_KEYRING_NOTE, prepareSessionBus } from '../../src/credentials/session-bus.js'
 import { listStores } from '../../src/credentials/availability.js'
+import { loginPage } from '../../src/web/pages.js'
 
 /**
  * Which store "System keyring" is on Linux depends on DBUS_SESSION_BUS_ADDRESS,
@@ -104,6 +105,26 @@ describe('the keyring option when the kernel holds it', () => {
   it('adds nothing for the desktop keyring', async () => {
     const stores = await listStores({ probe: working, backend: () => 'secret-service' })
     expect(stores.find((s) => s.kind === 'keyring')?.note).toBeUndefined()
+  })
+
+  it('shows the note on the option itself', async () => {
+    const page = (stores: Awaited<ReturnType<typeof listStores>>) =>
+      loginPage({
+        token: 't',
+        csrf: 'c',
+        disclaimer: 'plain',
+        bridgeHost: '127.0.0.1',
+        bridgeImapPort: 1143,
+        bridgeSmtpPort: 1025,
+        portsLocked: false,
+        stores,
+        suggested: 'keyring',
+        suggestionReason: 'r',
+      })
+    const kernel = page(await listStores({ probe: working, backend: () => 'kernel' }))
+    expect(kernel).toContain('<p class="here">No desktop session was found')
+    const desktop = page(await listStores({ probe: working, backend: () => 'secret-service' }))
+    expect(desktop).not.toContain('<p class="here">')
   })
 
   it('adds nothing to a keyring that does not work at all', async () => {

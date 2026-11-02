@@ -305,6 +305,20 @@ describe('the folders it creates', () => {
     expect(existsSync(records) ? readdirSync(records) : []).toEqual([])
   })
 
+  it('keeps a folder it still watches in the record, so that a crash does not lose it', () => {
+    const killed = store({ pid: 4242, isAlive: () => false })
+    killed.save('a.pdf', CONTENT, 'application/pdf', 'shared')
+    const foreign = join(root, 'shared', 'mine.txt')
+    writeFileSync(foreign, 'not yours')
+    killed.delete()
+    expect(readdirSync(records)).toHaveLength(1)
+    // Killed with only the folder left to watch, and the foreign file gone since.
+    rmSync(foreign)
+    store({ pid: 4343, isAlive: () => false }).start()
+    expect(existsSync(join(root, 'shared'))).toBe(false)
+    expect(readdirSync(records)).toEqual([])
+  })
+
   it('removes the folders of a server that no longer runs', () => {
     const killed = store({ pid: 4242, isAlive: () => false })
     killed.save('a.pdf', CONTENT, 'application/pdf', 'left/behind')
