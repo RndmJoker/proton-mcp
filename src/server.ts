@@ -43,6 +43,7 @@ import { pendingView } from './tools/pending-view.js'
 import { setHandshakeCapabilities } from './tools/capabilities.js'
 import { registerGuidance, INSTRUCTIONS } from './tools/guidance.js'
 import { registerUpdateTool } from './tools/updates.js'
+import { registerFilterTool } from './tools/filters.js'
 import { waitForIdle } from './in-flight.js'
 
 // The version number lives in package.json only.
@@ -369,6 +370,9 @@ async function main(): Promise<void> {
     )
     registerGuidance(server)
     registerUpdateTool(server, VERSION)
+    // Handed nothing but the server: it answers filter requests without
+    // touching the Bridge, so there is no connection it could use.
+    registerFilterTool(server)
     registerListFolders(server, connection)
     registerMessageTools(server, connection)
     registerSavedAttachmentTools(server, connection, saved)
