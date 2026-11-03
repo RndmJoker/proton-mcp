@@ -43,6 +43,7 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `send_draft` | Sends a draft that is already written, exactly as it was stored |
 | `open_configuration` | Hands back the address of the local web interface, with the token that opens it |
 | `check_for_updates` | Asks npm whether a newer version exists. The only thing here that contacts anything but your own machine, and only when called |
+| `manage_filters` | Reads and changes nothing. Filters are out of this server's reach, so it answers with the way through Proton's own settings page, where you agree to each change |
 
 Every tool that composes a message takes either `text` or `html`, never both: Proton drops the plain text half of a message that carries markup, so the half you confirmed would be the half that never arrived.
 
@@ -89,7 +90,7 @@ These limits come from the Bridge itself and cannot be worked around:
 
 - **No calendar, no contacts.** Neither flows through the Bridge.
 - **No Proton-specific features.** No message expiration, no password-protected messages to outside recipients.
-- **No access to filters, forwarding rules or account settings.** This is also a deliberate security boundary, see below.
+- **No access to filters, forwarding rules or account settings.** This is also a deliberate security boundary, see below. An assistant asked about filters gets `manage_filters`, which says so and explains the way through Proton's own settings page.
 - **No server-side threading or sorting.** The Bridge supports neither `THREAD` nor `SORT`, so ordering happens in this server, which costs one date read per message before a page can be cut out.
 - **No permanent deletion.** Deleted will mean moved to trash, on purpose.
 
@@ -271,7 +272,7 @@ The content of someone else's email is text written by strangers, and it is hand
 - **Message content is marked as untrusted** in every answer, enclosed in markers and separated from anything the server itself says. The markers carry a label drawn per answer, because a fixed one is written down in this repository: a sender could put the closing marker in the body and have everything after it read as though the server wrote it. A label that changes every time cannot be copied. For the same reason a subject, a display name or an attachment name never breaks across lines, however many line breaks it was sent with; the break is shown, not removed.
 - **Nothing is filtered out of the content** and no attempt is made to detect attacks. Such filters pretend to offer safety they cannot deliver.
 - **Sending always requires your confirmation**, enforced in the server rather than in a system prompt. There is no switch to turn it off, and a client that cannot ask the question cannot send.
-- **There will be no permanent deletion**, and no tools for filters, forwarding, account or key settings. A hijacked session must not be able to leave behind lasting access.
+- **There will be no permanent deletion**, and no tool that reads or changes filters, forwarding, account or key settings. A hijacked session must not be able to leave behind lasting access.
 - **HTML is never passed through raw** and external content is never fetched. Tracking pixels stay ineffective.
 - **Your mail is not kept on your disk.** No cache, no index, no copies. Anything this server wrote down would be your mail in plain text, outside the encryption you pay Proton for. The one exception is an attachment you have the assistant save, into a directory you chose, for an hour at most, see [Saved attachments](#saved-attachments).
 
