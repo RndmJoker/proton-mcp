@@ -44,9 +44,10 @@ import {
   type ServerSummary,
   type ToolLevelView,
   type LimitsView,
+  type RecordView,
 } from './sections.js'
 import type { Section, DisclaimerState } from './layout.js'
-import type { Level, SendLimits } from '../settings.js'
+import type { Level, SendLimits, RecordCopy } from '../settings.js'
 
 /**
  * Upper bound for a request body.
@@ -86,6 +87,7 @@ const FORM_SECTIONS: Record<string, Section> = {
   '/pin': 'permissions',
   '/permissions/levels': 'permissions',
   '/permissions/limits': 'permissions',
+  '/permissions/record': 'permissions',
 }
 
 /**
@@ -145,6 +147,10 @@ export interface WebInterfaceOptions {
   onLevels?: (levels: Record<string, Level>) => Promise<string | undefined>
   /** Stores the bounds on sending without asking. Returns an error to show, or nothing. */
   onLimits?: (limits: SendLimits) => Promise<string | undefined>
+  /** The recipient added to every message sent, for the pages. */
+  getRecord?: () => RecordView
+  /** Stores it, or removes it with undefined. Returns an error to show, or nothing. */
+  onRecord?: (record: RecordCopy | undefined) => Promise<string | undefined>
   /**
    * Called when the user signs in. Returns an error message to show, or nothing
    * on success. The master password is only set for the encrypted-file store.
@@ -567,6 +573,10 @@ export class WebInterface {
       await this.#handleLimits(response, body.fields)
       return
     }
+    if (writing && path === '/permissions/record') {
+      await this.#handleRecord(response, body.fields)
+      return
+    }
     if (writing && path === '/dismiss-notice') {
       await this.#handleDismissNotice(response, body.fields)
       return
@@ -712,7 +722,9 @@ export class WebInterface {
           csrfPin: csrfToken(this.#secrets, '/pin'),
           csrfLevels: csrfToken(this.#secrets, '/permissions/levels'),
           csrfLimits: csrfToken(this.#secrets, '/permissions/limits'),
+          csrfRecord: csrfToken(this.#secrets, '/permissions/record'),
           ...(permissions ? { tools: permissions.tools, limits: permissions.limits } : {}),
+          ...(this.#options.getRecord ? { record: this.#options.getRecord() } : {}),
           ...banners,
         })
         break
@@ -728,6 +740,10 @@ export class WebInterface {
         page = overviewSection({
           connected: true,
           ...(this.#options.getServers ? { servers: this.#options.getServers() } : {}),
+          ...((): { record?: { address: string; mode: 'cc' | 'bcc' } } => {
+            const record = this.#options.getRecord?.()
+            return record?.address ? { record: { address: record.address, mode: record.mode ?? 'bcc' } } : {}
+          })(),
           ...(this.#options.getPermissions
             ? {
                 departures: this.#options
@@ -854,6 +870,38 @@ export class WebInterface {
 
     const failure = await this.#options.onLimits(limits)
     await this.#render('permissions', response, failure ? { error: failure } : { notice: 'The bounds are saved.' })
+  }
+
+  /** Takes the copy recipient from the form. An empty address removes it. */
+  async #handleRecord(response: ServerResponse, fields: Record<string, string>): Promise<void> {
+    if (!this.#options.onRecord) {
+      await this.#render('permissions', response, { error: 'This server cannot store a copy recipient.' })
+      return
+    }
+    // The page shows no form when the environment sets the copy, but a
+    // request does not need the page. Storing it anyway would change nothing,
+    // since the environment wins, and the notice would claim otherwise.
+    if (this.#options.getRecord?.().fixed) {
+      await this.#render('permissions', response, {
+        error: 'The copy is set in the environment (PROTON_MCP_COPY_TO), so it is not changed here.',
+      })
+      return
+    }
+    const address = (fields.address ?? '').trim()
+    if (!address) {
+      const failure = await this.#options.onRecord(undefined)
+      await this.#render('permissions', response,
+        failure ? { error: failure } : { notice: 'No copy is added to messages any more.' })
+      return
+    }
+    const mode = fields.mode === 'cc' ? 'cc' : 'bcc'
+    if (fields.mode !== undefined && fields.mode !== 'cc' && fields.mode !== 'bcc') {
+      await this.#render('permissions', response, { error: `"${fields.mode}" is neither cc nor bcc.` })
+      return
+    }
+    const failure = await this.#options.onRecord({ address, mode })
+    await this.#render('permissions', response,
+      failure ? { error: failure } : { notice: `Every message sent now also goes to ${address} as ${mode === 'cc' ? 'Cc' : 'Bcc'}.` })
   }
 
   /**

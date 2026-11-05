@@ -37,7 +37,7 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `reply_draft` | Prepares a reply as a draft, with the original quoted |
 | `forward_draft` | Prepares a forward as a draft, attachments and all |
 | `list_drafts` | The drafts, newest first |
-| `send_message` | Composes and sends. Asks you first, always |
+| `send_message` | Composes and sends. Asks you first unless you chose otherwise, see [What the assistant may do](#what-the-assistant-may-do) |
 | `send_reply` | Replies and sends, keeping the conversation intact |
 | `send_forward` | Forwards and sends, attachments and all |
 | `send_draft` | Sends a draft that is already written, exactly as it was stored |
@@ -61,7 +61,7 @@ There is also a **local web interface**, on `127.0.0.1` only, at one fixed addre
 | Folders and labels | On its own page, only when asked. They belong to the whole account, so a folder named after a bank gives that away on its own |
 | Bridge | The ports, the pinned certificate, and a button that tries the connection. Ports are stored in `~/.config/proton-mcp/settings.json`; an explicit environment variable wins and the form disappears |
 | Credentials | Where the Bridge password is kept, and signing out, which clears it from every store at once and signs out every running server |
-| Permissions | The PIN that every change in this interface asks for, once you set one |
+| Permissions | What each tool may do, the bounds on sending without asking, a copy of everything sent, and the PIN that every change in this interface asks for once you set one |
 | Activity | What is running and for how long, plus the last 50 finished calls. Tool names and timings only, never arguments |
 
 One more page appears only while a message is waiting for you to confirm it, linked from that question: the message rendered as the recipient will see it, every address in full, every alt text, every attachment. It is the one place that shows mail, and it carries no confirm button by design. It is served by the server that asked, on a port of its own, because the message is held in that server's memory and nowhere else.
@@ -79,9 +79,7 @@ This table says what the server cannot do today. The issue behind each entry say
 | Missing | Tracked in |
 | :--- | :--- |
 | Attachments composed from files on this machine | [#17](https://github.com/RndmJoker/proton-mcp/issues/17) |
-| Choosing per tool what an assistant may do | [#19](https://github.com/RndmJoker/proton-mcp/issues/19) |
 | Choosing in the interface how much markup a message may carry. The levels exist and a caller picks one per message; what is missing is a ceiling the caller cannot raise | [#24](https://github.com/RndmJoker/proton-mcp/issues/24) |
-| A fixed extra recipient the assistant cannot remove | [#18](https://github.com/RndmJoker/proton-mcp/issues/18) |
 
 **Binary attachments** are not returned as text: base64 in the context window would be unusable. `save_attachment` writes one to a directory you name instead, and it is off until you name one, see [Saved attachments](#saved-attachments).
 
@@ -325,6 +323,10 @@ Mail is text written by strangers, handed to a model that can call tools. A mess
 - **Blind copies stay blind.** They travel in the envelope and never appear in the headers the recipients see. Verified against a real delivery.
 - **The Bridge password is protected on the way out too.** IMAP and SMTP are both verified against the same pinned certificate, and on both STARTTLS is required rather than merely attempted. Something listening on the port that offers no encryption gets no password.
 
+Replying and forwarding exist as sending tools of their own, not just as drafts. The reason is measured: Proton rewrites the thread headers of anything it stores, so a reply written to a draft and sent later loses the chain, while a reply handed straight to SMTP keeps its `In-Reply-To` and stays in the conversation.
+
+After a send, nothing checks its own work. The Bridge took about six and a half seconds to accept a message and the message appeared over IMAP about three seconds after that, so an immediate look would describe a state that is not the outcome.
+
 ### What the assistant may do
 
 Every tool that can be switched has a level, chosen on the Permissions page of the interface or in the environment, which wins:
@@ -357,9 +359,21 @@ PROTON_MCP_ACT_ON_ITS_OWN=send_reply
 
 A send outside a bound becomes a question, not a failure, and the question says which bound held it back. A send that went out without asking says so in its answer, and the overview of the interface lists every tool whose level departs from the default. **Without a PIN, anything on your machine can change these levels, the assistant included**, so set one before you allow sending without asking, or set the levels in the environment.
 
-Replying and forwarding exist as sending tools of their own, not just as drafts. The reason is measured: Proton rewrites the thread headers of anything it stores, so a reply written to a draft and sent later loses the chain, while a reply handed straight to SMTP keeps its `In-Reply-To` and stays in the conversation.
+### A copy of everything sent
 
-After a send, nothing checks its own work. The Bridge took about six and a half seconds to accept a message and the message appeared over IMAP about three seconds after that, so an immediate look would describe a state that is not the outcome.
+One address can receive a copy of every message any sending tool sends: as a blind copy, for a record the recipients do not see, or as Cc, for a second person who sees every send. Set it on the Permissions page or in the environment, which wins:
+
+```
+PROTON_MCP_COPY_TO=archive@example.com
+PROTON_MCP_COPY_AS=bcc
+```
+
+- **It is added before the question is asked**, so it is part of what you confirm, and the question names it as coming from this setting rather than from the assistant.
+- **Nothing the assistant passes removes it.** An address the assistant named itself is not added a second time.
+- **A send without asking carries it too**, and it does not count against the permitted recipients.
+- **Only an address in plain ASCII is accepted**, for the same reason as every other recipient, and more so: this one receives everything.
+
+A field that quietly adds a recipient to every message is what an attacker would most like to set. So the overview shows it whenever it is on, and once a PIN is set, only someone who knows the PIN can change it.
 
 ### What lands on your disk
 

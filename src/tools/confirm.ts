@@ -191,6 +191,12 @@ export function describeForConfirmation(
     describeRecipients(draft),
     `Subject: ${draft.subject || '(no subject)'}`,
   ]
+  if (draft.record) {
+    lines.push(
+      `Added by your settings as a copy of everything sent: ${draft.record.address} ` +
+        `(${draft.record.mode === 'cc' ? 'Cc' : 'Bcc'}).`,
+    )
+  }
   if (heldBack) {
     lines.push('', `This tool may send without asking, but ${heldBack}, so you are asked.`)
   }

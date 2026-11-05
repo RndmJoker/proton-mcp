@@ -51,6 +51,8 @@ import { previewUrl } from './failures.js'
 import { describeFailure, withSignIn } from './failures.js'
 import { track } from '../in-flight.js'
 import type { Permissions } from '../permissions.js'
+import type { RecordCopy } from '../settings.js'
+import { withRecord } from '../mail/record.js'
 
 const ok = (text: string): CallToolResult => ({ content: [{ type: 'text', text }] })
 
@@ -77,6 +79,15 @@ function describeOutcome(draft: Draft, outcome: SendOutcome): string {
     `Sent. The Bridge accepted the message for ${outcome.accepted.length} recipient(s).`,
     '',
     describeRecipients(draft),
+    // The address is among the recipients above, and the assistant did not put
+    // it there. Without this line it reads as a recipient that appeared from
+    // nowhere, and a careful assistant would report it as a problem.
+    ...(draft.record
+      ? [
+          `Added by the user's settings as a copy of everything sent: ${draft.record.address} ` +
+            `(${draft.record.mode === 'cc' ? 'Cc' : 'Bcc'}). Not a mistake, and not yours to remove.`,
+        ]
+      : []),
     `Subject: ${draft.subject || '(no subject)'}`,
     ...(draft.attachedMessage ? [`Attached: ${draft.attachedMessage.filename}`] : []),
     `Id: ${outcome.messageId}`,
@@ -105,6 +116,8 @@ export interface SendDependencies {
    * behaviour before levels existed and the default with them.
    */
   permissions?: Permissions
+  /** The recipient added to every message sent (#18), read at every send. */
+  record?: () => RecordCopy | undefined
 }
 
 function requireFrom(deps: SendDependencies): string {
@@ -159,7 +172,9 @@ async function confirmed(
     )
   }
 
-  const draft = await build()
+  // The configured copy goes in before the digest is taken, on both rounds, so
+  // it is part of what is asked and part of what a yes is bound to.
+  const draft = withRecord(await build(), deps.record?.())
   const digest = digestOf(draft)
   const pending = pendingSend(ctx)
 
@@ -168,7 +183,12 @@ async function confirmed(
     // a bound holds it back; then it asks like every other, and says why.
     let heldBack: string | undefined
     if (level === 'act' && deps.permissions) {
-      const recipients = [...draft.to, ...draft.cc, ...draft.bcc].map((r) => r.address)
+      // The copy the user configured is not held against the permitted list:
+      // the user chose it, and it goes to every message anyway.
+      const copy = draft.record?.address.toLowerCase()
+      const recipients = [...draft.to, ...draft.cc, ...draft.bcc]
+        .map((r) => r.address)
+        .filter((address) => address.toLowerCase() !== copy)
       const hold = deps.permissions.holdBack(recipients)
       if (!hold) {
         const outcome = await sendMessage(deps.config, deps.getCredentials, deps.readOnly(), draft)

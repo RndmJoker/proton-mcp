@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { request as httpRequest } from 'node:http'
 import { WebInterface } from '../../src/web/server.js'
-import type { ToolLevelView, LimitsView } from '../../src/web/sections.js'
-import type { Level, SendLimits } from '../../src/settings.js'
+import type { ToolLevelView, LimitsView, RecordView } from '../../src/web/sections.js'
+import type { Level, SendLimits, RecordCopy } from '../../src/settings.js'
+import { recordProblem } from '../../src/mail/record.js'
+import { hashPin, type StoredPin } from '../../src/web/security.js'
 
 /**
  * The page where the user decides what the assistant may do.
@@ -18,6 +20,9 @@ let tools: ToolLevelView[]
 let limits: LimitsView
 let savedLevels: Array<Record<string, Level>>
 let savedLimits: SendLimits[]
+let record: RecordView
+let savedRecords: Array<RecordCopy | undefined>
+let pin: StoredPin | undefined
 
 beforeEach(async () => {
   tools = [
@@ -28,6 +33,9 @@ beforeEach(async () => {
   limits = { allowed: [], fixed: { allowed: false, maxPerHour: false, until: false } }
   savedLevels = []
   savedLimits = []
+  record = { fixed: false }
+  savedRecords = []
+  pin = undefined
   web = new WebInterface({
     port: 0,
     getPermissions: () => ({ tools, limits }),
@@ -39,6 +47,15 @@ beforeEach(async () => {
       savedLimits.push(next)
       return undefined
     },
+    getRecord: () => record,
+    // The same check the server makes before it stores anything.
+    onRecord: async (next) => {
+      const problem = next ? recordProblem(next.address) : undefined
+      if (problem) return problem
+      savedRecords.push(next)
+      return undefined
+    },
+    getPin: () => pin,
     onSignIn: async () => undefined,
     onSignOut: async () => undefined,
     getStatus: async () => ({
@@ -165,5 +182,80 @@ describe('the bounds', () => {
     expect((await send('/permissions/limits', { csrf: token, maxPerHour: '0' })).body).toContain('not a usable number')
     expect((await send('/permissions/limits', { csrf: token, until: 'soon' })).body).toContain('is not a day')
     expect(savedLimits).toEqual([])
+  })
+})
+
+describe('the copy of everything sent (#18)', () => {
+  it('stores an address with the way it is added', async () => {
+    const res = await send('/permissions/record', {
+      csrf: await csrf('/permissions/record'),
+      address: 'boss@example.com',
+      mode: 'cc',
+    })
+    expect(savedRecords).toEqual([{ address: 'boss@example.com', mode: 'cc' }])
+    expect(res.body).toContain('Every message sent now also goes to boss@example.com as Cc')
+  })
+
+  it('adds a blind copy when no way is given', async () => {
+    await send('/permissions/record', { csrf: await csrf('/permissions/record'), address: 'archive@example.com' })
+    expect(savedRecords).toEqual([{ address: 'archive@example.com', mode: 'bcc' }])
+  })
+
+  it('removes the copy when the address is left empty', async () => {
+    const res = await send('/permissions/record', { csrf: await csrf('/permissions/record'), address: '' })
+    expect(savedRecords).toEqual([undefined])
+    expect(res.body).toContain('No copy is added to messages any more')
+  })
+
+  it('refuses a way that is neither cc nor bcc', async () => {
+    const res = await send('/permissions/record', {
+      csrf: await csrf('/permissions/record'),
+      address: 'archive@example.com',
+      mode: 'to',
+    })
+    expect(res.body).toContain('is neither cc nor bcc')
+    expect(savedRecords).toEqual([])
+  })
+
+  it('refuses an address that is not plain, and says why', async () => {
+    const res = await send('/permissions/record', {
+      csrf: await csrf('/permissions/record'),
+      address: 'a@example.com, b@example.org',
+    })
+    expect(res.body).toContain('is not a plain address')
+    expect(savedRecords).toEqual([])
+  })
+
+  it('shows a copy set in the environment as text, without a form', async () => {
+    record = { fixed: true, address: 'archive@example.com', mode: 'bcc' }
+    const { body } = await send('/permissions')
+    expect(body).not.toContain('action="/permissions/record"')
+    expect(body).toContain('PROTON_MCP_COPY_TO')
+    expect(body).toContain('archive@example.com')
+  })
+
+  it('cannot be changed while the environment sets it, even without the page', async () => {
+    const token = await csrf('/permissions/record')
+    record = { fixed: true, address: 'archive@example.com', mode: 'bcc' }
+    const res = await send('/permissions/record', { csrf: token, address: 'someone@elsewhere.example' })
+    expect(res.body).toContain('set in the environment')
+    expect(savedRecords).toEqual([])
+  })
+
+  it('needs the PIN once one is set', async () => {
+    pin = await hashPin('correct horse')
+    const token = await csrf('/permissions/record')
+    const without = await send('/permissions/record', { csrf: token, address: 'someone@elsewhere.example' })
+    expect(without.body).toContain('needs the PIN')
+    expect(savedRecords).toEqual([])
+    await send('/permissions/record', { csrf: token, address: 'archive@example.com', pin: 'correct horse' })
+    expect(savedRecords).toEqual([{ address: 'archive@example.com', mode: 'bcc' }])
+  })
+
+  it('is named in the overview while it is on', async () => {
+    record = { fixed: false, address: 'archive@example.com', mode: 'bcc' }
+    const { body } = await send('/')
+    expect(body).toContain('Copy of everything sent')
+    expect(body).toContain('archive@example.com (Bcc)')
   })
 })

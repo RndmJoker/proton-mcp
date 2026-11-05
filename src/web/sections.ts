@@ -90,6 +90,8 @@ export interface OverviewData extends Common {
   servers?: ServerSummary[]
   /** Tools whose level differs from the default, with that level in words. */
   departures?: Array<{ tool: string; level: string }>
+  /** The recipient added to every message sent, when one is. */
+  record?: { address: string; mode: 'cc' | 'bcc' }
 }
 
 /**
@@ -158,6 +160,13 @@ export function overviewSection(data: OverviewData): string {
       !data.departures || data.departures.length === 0
         ? 'as by default: sending asks first, everything else acts'
         : data.departures.map((d) => `${d.tool}: ${d.level}`).join(', '),
+    ),
+    row(
+      'Copy of everything sent',
+      data.record
+        ? `<span class="state bad">${escapeHtml(data.record.address)} (${data.record.mode === 'cc' ? 'Cc' : 'Bcc'})</span>`
+        : 'none',
+      true,
     ),
     row('Server running for', formatDuration(data.uptimeMs)),
   ]
@@ -419,12 +428,57 @@ export interface LimitsView {
   fixed: { allowed: boolean; maxPerHour: boolean; until: boolean }
 }
 
+/** The recipient added to every message sent, as the page shows it. */
+export interface RecordView {
+  address?: string
+  mode?: 'cc' | 'bcc'
+  /** Set in the environment, and so not changeable here. */
+  fixed: boolean
+}
+
 export interface PermissionsData extends Common {
   csrfPin: string
   csrfLevels?: string
   csrfLimits?: string
+  csrfRecord?: string
   tools?: ToolLevelView[]
   limits?: LimitsView
+  record?: RecordView
+}
+
+/** The copy of everything sent: who gets it, and the form to change it. */
+function recordForm(data: PermissionsData): string {
+  const record = data.record
+  if (!record) return ''
+  const now = record.address
+    ? `<p>Every message sent through this server also goes to <code>${escapeHtml(record.address)}</code>
+as ${record.mode === 'cc' ? 'Cc, visible to every recipient' : 'Bcc, invisible to the other recipients'}.</p>`
+    : '<p>No copy is added.</p>'
+  if (record.fixed) {
+    return `<h2>A copy of everything sent</h2>
+<div class="card">${now}<p class="hint">Set in the environment (<code>PROTON_MCP_COPY_TO</code>), so it is
+not changed here.</p></div>`
+  }
+  return `<h2>A copy of everything sent</h2>
+<div class="card">
+${now}
+<form method="post" action="/permissions/record">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfRecord ?? '')}">
+  <label for="copyTo">Address</label>
+  <input id="copyTo" name="address" type="text" autocomplete="off" spellcheck="false"
+         value="${escapeHtml(record.address ?? '')}" placeholder="archive@example.com">
+  <label for="copyAs">As</label>
+  <select id="copyAs" name="mode">
+    <option value="bcc"${record.mode !== 'cc' ? ' selected' : ''}>Bcc: a record the recipients do not see</option>
+    <option value="cc"${record.mode === 'cc' ? ' selected' : ''}>Cc: visible to every recipient</option>
+  </select>
+  <p class="hint">Added to every message every sending tool sends, before the question is asked, so it is
+  part of what you confirm, and the question names it as coming from this setting. Nothing the
+  assistant passes removes it. Leave the address empty to add nothing.</p>
+  ${pinField(data.pinRequired === true)}
+  <button type="submit">Save the copy</button>
+</form>
+</div>`
 }
 
 const LEVEL_NAMES: Record<'off' | 'ask' | 'act', string> = {
@@ -574,6 +628,7 @@ made here apply to every running server at once.</p>
 <h2>PIN</h2>
 <div class="card">${pin}</div>
 ${levelTable(data)}
-${limitsForm(data)}`,
+${limitsForm(data)}
+${recordForm(data)}`,
   )
 }

@@ -39,6 +39,8 @@ import { loadSettings, updateSettings, watchSettings, type StoredSettings } from
 import { registerInstance, listInstances } from './instances.js'
 import { STORE_DESCRIPTIONS } from './credentials/store.js'
 import { PreviewServer } from './web/preview-server.js'
+import { recordFromEnvironment, recordProblem, RecordError } from './mail/record.js'
+import type { RecordCopy } from './settings.js'
 import * as activity from './activity.js'
 import { WebInterface, type StatusSnapshot } from './web/server.js'
 import { registerListFolders } from './tools/list-folders.js'
@@ -128,6 +130,24 @@ async function main(): Promise<void> {
     }
     throw error
   }
+  // The recipient added to every message sent (#18). From the environment it is
+  // fixed; otherwise the interface sets it, guarded by the PIN when one is set.
+  let recordFromEnv: RecordCopy | undefined
+  try {
+    recordFromEnv = recordFromEnvironment()
+  } catch (error) {
+    if (error instanceof RecordError) {
+      process.stderr.write(`${NAME}: ${error.message}\n`)
+      process.exit(1)
+    }
+    throw error
+  }
+  const recordInForce = (): RecordCopy | undefined => recordFromEnv ?? settings.record
+  const startRecord = recordInForce()
+  if (startRecord) {
+    notify(`every message sent also goes to ${startRecord.address} (${startRecord.mode})`)
+  }
+
   const departures = permissions.departures()
   if (departures.length > 0) {
     notify(
@@ -297,6 +317,29 @@ async function main(): Promise<void> {
           ? `assistant permissions changed: ${now.map((d) => `${d.tool} ${d.level}`).join(', ')}`
           : 'assistant permissions are back to the default',
       )
+      return undefined
+    },
+    getRecord: () => {
+      const record = recordInForce()
+      return {
+        fixed: recordFromEnv !== undefined,
+        ...(record ? { address: record.address, mode: record.mode } : {}),
+      }
+    },
+    onRecord: async (record) => {
+      if (record) {
+        const problem = recordProblem(record.address)
+        if (problem) return problem
+      }
+      try {
+        settings = await updateSettings((current) => {
+          const { record: _old, ...rest } = current
+          return record ? { ...rest, record: { address: record.address.trim(), mode: record.mode } } : rest
+        })
+      } catch (error) {
+        return `The copy recipient could not be saved: ${(error as Error).message}`
+      }
+      notify(record ? `every message sent now also goes to ${record.address} (${record.mode})` : 'no copy is added to messages any more')
       return undefined
     },
     onLimits: async (limits) => {
@@ -620,6 +663,7 @@ async function main(): Promise<void> {
       from: () => session.address,
       codec: sendCodec,
       permissions,
+      record: recordInForce,
     })
     registerInterfaceTool(server, {
       url: () => web.url,

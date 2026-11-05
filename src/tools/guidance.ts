@@ -122,6 +122,11 @@ eighteen links, at which point the confirm button sat below the bottom of the
 dialog and nothing could be sent at all. Recipients are the one thing never
 summarised, however many there are.
 
+The user can set one address that receives a copy of everything sent. It is
+added to every message before the question, as Cc or Bcc, and both the question
+and the answer after sending name it as coming from that setting. It is not
+something you added by mistake, and nothing you pass removes it.
+
 **In the browser**, everything else:
 
 - The message rendered as the recipient will see it, quote included.

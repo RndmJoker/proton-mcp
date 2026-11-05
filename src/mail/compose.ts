@@ -38,6 +38,13 @@ export interface Draft {
   to: Recipient[]
   cc: Recipient[]
   bcc: Recipient[]
+  /**
+   * The recipient the user configured for every message sent, when one is.
+   * Already among `cc` or `bcc`; this only marks it, so the question can say
+   * that it is there because of the setting and not because the assistant
+   * chose it.
+   */
+  record?: { address: string; mode: 'cc' | 'bcc' }
   subject: string
   text: string
   /** Message-ID of the message being answered, for In-Reply-To. */

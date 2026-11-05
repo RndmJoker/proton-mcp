@@ -59,6 +59,7 @@ function register(env: NodeJS.ProcessEnv = {}) {
       verify: async (state: string) => JSON.parse(state),
     } as never,
     permissions,
+    record: () => settings.record,
   })
   return { handlers, permissions }
 }
@@ -176,5 +177,64 @@ describe('switched off', () => {
     const { handlers } = register({ PROTON_MCP_OFF: 'send_message' })
     await handlers.get('send_message')!(MESSAGE, capable())
     expect(sent).toHaveLength(0)
+  })
+})
+
+describe('the copy of everything sent (#18)', () => {
+  it('is named in the question as coming from the settings', async () => {
+    settings = { record: { address: 'archive@example.com', mode: 'bcc' } }
+    const { handlers } = register()
+    const result = await handlers.get('send_message')!(MESSAGE, capable())
+    const message = result.inputRequests?.[CONFIRM_KEY]?.params?.message ?? ''
+    expect(message).toContain('Added by your settings as a copy of everything sent: archive@example.com (Bcc)')
+  })
+
+  it('goes out with a message sent after a yes', async () => {
+    settings = { record: { address: 'archive@example.com', mode: 'bcc' } }
+    const { handlers } = register()
+    const first = await handlers.get('send_message')!(MESSAGE, capable())
+    await handlers.get('send_message')!(MESSAGE, answered(first.requestState!, true))
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.to).toContain('archive@example.com')
+  })
+
+  it('goes out with a message sent without asking, and is not held against the permitted list', async () => {
+    settings = {
+      levels: { send_message: 'act' },
+      limits: { allowed: ['you@example.com'] },
+      record: { address: 'archive@elsewhere.example', mode: 'bcc' },
+    }
+    const { handlers } = register()
+    await handlers.get('send_message')!(MESSAGE, capable())
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.to).toEqual(['you@example.com', 'archive@elsewhere.example'])
+  })
+
+  it('cannot be slipped in between the question and the answer', async () => {
+    // The yes covers the recipients as they were asked about. A copy added
+    // afterwards changes them, so nothing is sent.
+    const { handlers } = register()
+    const first = await handlers.get('send_message')!(MESSAGE, capable())
+    settings = { record: { address: 'someone@elsewhere.example', mode: 'bcc' } }
+    await handlers.get('send_message')!(MESSAGE, answered(first.requestState!, true))
+    expect(sent).toHaveLength(0)
+  })
+})
+
+describe('the answer after sending', () => {
+  it('names the copy as the user setting, so the assistant does not take it for a stray recipient', async () => {
+    settings = { levels: { send_message: 'act' }, record: { address: 'archive@example.com', mode: 'bcc' } }
+    const { handlers } = register()
+    const result = await handlers.get('send_message')!(MESSAGE, capable())
+    expect(result.content?.[0]?.text).toContain(
+      "Added by the user's settings as a copy of everything sent: archive@example.com (Bcc)",
+    )
+  })
+
+  it('says nothing about a copy when none is set', async () => {
+    settings = { levels: { send_message: 'act' } }
+    const { handlers } = register()
+    const result = await handlers.get('send_message')!(MESSAGE, capable())
+    expect(result.content?.[0]?.text).not.toContain('copy of everything sent')
   })
 })
