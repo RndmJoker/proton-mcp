@@ -11,21 +11,39 @@
  * for what each one defends against.
  */
 
-import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
+import {
+  createServer,
+  request as httpRequest,
+  type Server,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http'
 import type { Credentials, CredentialStore, StoreKind } from '../credentials/store.js'
 import { STORE_DESCRIPTIONS } from '../credentials/store.js'
 import { listStores, recommend, recommendationReason } from '../credentials/availability.js'
-import { createSession, checkRequest, csrfToken, securityHeaders, type SessionSecrets } from './security.js'
+import {
+  createSession,
+  checkRequest,
+  csrfToken,
+  securityHeaders,
+  hashPin,
+  pinMatches,
+  pinProblem,
+  AttemptLimiter,
+  type SessionSecrets,
+  type StoredPin,
+} from './security.js'
 import { loginPage, rejectionPage, unlockPage } from './pages.js'
 import {
   overviewSection,
   bridgeSection,
   credentialsSection,
+  permissionsSection,
   activitySection,
   mailboxSection,
+  type ServerSummary,
 } from './sections.js'
 import type { Section, DisclaimerState } from './layout.js'
-import { pendingPage, noPendingPage, type PendingData } from './pending.js'
 
 /**
  * Upper bound for a request body.
@@ -50,37 +68,69 @@ const SECTION_PATHS: Record<string, Section | undefined> = {
   '/mailboxes': 'mailboxes',
   '/bridge': 'bridge',
   '/credentials': 'credentials',
+  '/permissions': 'permissions',
   '/activity': 'activity',
 }
+
+/**
+ * Where an answer to each form lands, so a wrong PIN is reported on the page the
+ * user was on. Anything not listed lands on the overview.
+ */
+const FORM_SECTIONS: Record<string, Section> = {
+  '/settings': 'bridge',
+  '/test-connection': 'bridge',
+  '/sign-out': 'credentials',
+  '/pin': 'permissions',
+}
+
+/**
+ * Posts that change nothing worth a PIN. Testing the connection only reads, and
+ * the notice about not being Proton's software only hides a paragraph.
+ */
+const WITHOUT_PIN = new Set(['/test-connection', '/dismiss-notice'])
+
+/**
+ * What `/health` answers, so a server that finds the port taken can tell a
+ * running proton-mcp from some other program. Says nothing else on purpose.
+ */
+const HEALTH_BODY = JSON.stringify({ app: 'proton-mcp' })
 
 /** The same names as a set, for checking a section that arrived in a form. */
 const SECTIONS = new Set<string>(Object.values(SECTION_PATHS) as string[])
 
 /**
- * The port tried first.
+ * The one address of the interface, shared by every running server.
  *
- * A fixed default rather than a random one, because the interface runs for as
- * long as the server does and is meant to be opened again and again. A port that
- * moved on every start would make that needlessly awkward.
+ * Fixed rather than random, and since 2026-11-05 also not walked upwards when
+ * taken: every client session starts its own server, and the interface they
+ * share has to be at the same address for all of them. The first server to
+ * start serves it; the others take over when it stops.
  */
 export const DEFAULT_WEB_PORT = 7345
 
-/**
- * How many consecutive ports to try.
- *
- * Several clients may each start their own server, and the second one must not
- * fail over a port the first one took. Failing outright would be worse than
- * moving up by one.
- */
-export const PORT_ATTEMPTS = 10
+/** How often a server that does not serve the interface tries to take it over. */
+export const TAKEOVER_INTERVAL_MS = 10_000
+
+/** Who is on the port: another proton-mcp, something else, or nobody. */
+export type PortOccupant = 'proton-mcp' | 'other' | 'none'
 
 export interface WebInterfaceOptions {
   /**
-   * Left out, the interface starts at DEFAULT_WEB_PORT and walks upwards past
-   * anything already listening. 0 lets the operating system pick a free port,
-   * which the tests use to avoid collisions; it is not the default.
+   * Left out, the interface uses DEFAULT_WEB_PORT. 0 lets the operating system
+   * pick a free port, which the tests use to avoid collisions; there is no
+   * takeover then, since no other server could know the address.
    */
   port?: number
+  /** The PIN as stored, or nothing while none is set. Read on every request. */
+  getPin?: () => StoredPin | undefined
+  /** Stores a new PIN, or removes it with undefined. Returns an error to show. */
+  onPinChange?: (next: StoredPin | undefined) => Promise<string | undefined>
+  /** Every running server, for the overview. */
+  getServers?: () => ServerSummary[]
+  /** Told whenever this server starts or stops serving the interface. */
+  onServingChange?: (serving: boolean) => void
+  /** How often to try taking over the port. TAKEOVER_INTERVAL_MS unless a test says otherwise. */
+  takeoverIntervalMs?: number
   /**
    * Called when the user signs in. Returns an error message to show, or nothing
    * on success. The master password is only set for the encrypted-file store.
@@ -141,16 +191,6 @@ export interface WebInterfaceOptions {
   noticeDismissed?: () => boolean
   /** Remembers a dismissal. Without it the notice has no button. */
   onDismissNotice?: () => Promise<void>
-  /**
-   * The message behind a pending confirmation, if one is waiting.
-   *
-   * Absent when nothing can be previewed, which makes the page say so rather
-   * than fail. What it returns is decrypted mail, so the caller holds it in
-   * memory only and drops it as soon as the question is answered.
-   */
-  getPending?: (
-    digest: string,
-  ) => Omit<PendingData, 'token' | 'disclaimer'> | undefined
   /** Where notices go. stderr, never stdout, which carries the MCP protocol. */
   notify?: (message: string) => void
 }
@@ -231,6 +271,10 @@ export class WebInterface {
   #server: Server | undefined
   #secrets: SessionSecrets = createSession()
   #port = 0
+  /** Who held the port when this server last found it taken. */
+  #occupant: PortOccupant = 'none'
+  #takeover: NodeJS.Timeout | undefined
+  readonly #limiter = new AttemptLimiter()
   readonly #options: WebInterfaceOptions
   readonly #notify: (message: string) => void
 
@@ -239,89 +283,170 @@ export class WebInterface {
     this.#notify = options.notify ?? ((m) => process.stderr.write(`proton-mcp: ${m}\n`))
   }
 
-  /** The URL the user has to open, including the access token. */
+  /**
+   * The address of the interface. The same for every running server, whichever
+   * of them serves it, and nothing in it is secret.
+   */
   get url(): string {
-    return `http://${BIND_ADDRESS}:${this.#port}/?token=${this.#secrets.accessToken}`
+    const port = this.#port || this.#options.port || DEFAULT_WEB_PORT
+    return `http://${BIND_ADDRESS}:${port}/`
   }
 
   get port(): number {
     return this.#port
   }
 
+  /** True while this server serves the interface itself. */
   get running(): boolean {
     return this.#server?.listening === true
   }
 
-  async start(): Promise<string> {
-    if (this.#server?.listening) return this.url
+  /**
+   * Whether the interface can be reached at `url`, from this server or from
+   * another running proton-mcp. False when something else holds the port.
+   */
+  get reachable(): boolean {
+    return this.running || this.#occupant === 'proton-mcp'
+  }
 
-    const build = (): Server => {
-      const created = createServer((request, response) => {
-        void this.#handle(request, response).catch(() => {
-          // A handler that throws must not take the process down, and must not
-          // leak anything either.
-          this.#send(response, 500, 'text/plain; charset=utf-8', 'Internal error.')
+  /** Who held the port when this server last found it taken. */
+  get occupant(): PortOccupant {
+    return this.running ? 'none' : this.#occupant
+  }
+
+  #build(): Server {
+    const created = createServer((request, response) => {
+      void this.#handle(request, response).catch(() => {
+        // A handler that throws must not take the process down, and must not
+        // leak anything either.
+        this.#send(response, 500, 'text/plain; charset=utf-8', 'Internal error.')
+      })
+    })
+    // Slow clients must not be able to tie up the server indefinitely.
+    created.headersTimeout = 10_000
+    created.requestTimeout = 30_000
+    return created
+  }
+
+  /** One attempt at the port. Resolves with the error instead of throwing. */
+  async #listen(port: number): Promise<Error | undefined> {
+    const attempt = this.#build()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => reject(error)
+        attempt.once('error', onError)
+        // Explicitly loopback: binding to 0.0.0.0 would put a page that stores
+        // credentials onto the network.
+        attempt.listen(port, BIND_ADDRESS, () => {
+          attempt.removeListener('error', onError)
+          resolve()
         })
       })
-      // Slow clients must not be able to tie up the server indefinitely.
-      created.headersTimeout = 10_000
-      created.requestTimeout = 30_000
-      return created
+    } catch (error) {
+      attempt.close()
+      return error as Error
     }
+    const address = attempt.address()
+    this.#port = typeof address === 'object' && address ? address.port : 0
+    this.#server = attempt
+    this.#occupant = 'none'
+    this.#options.onServingChange?.(true)
+    return undefined
+  }
+
+  /**
+   * Asks whoever holds the port whether it is a proton-mcp.
+   *
+   * The answer decides between "another session serves the interface, all is
+   * well" and "something else sits on this port", which the user has to hear
+   * about, because then nobody serves the interface at all.
+   */
+  static async probe(port: number, timeoutMs = 1500): Promise<PortOccupant> {
+    return new Promise((resolve) => {
+      const request = httpRequest(
+        { host: BIND_ADDRESS, port, path: '/health', method: 'GET', timeout: timeoutMs },
+        (response) => {
+          const chunks: Buffer[] = []
+          let size = 0
+          response.on('data', (chunk: Buffer) => {
+            size += chunk.length
+            if (size <= 256) chunks.push(chunk)
+          })
+          response.on('end', () => {
+            try {
+              const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { app?: unknown }
+              resolve(body.app === 'proton-mcp' ? 'proton-mcp' : 'other')
+            } catch {
+              resolve('other')
+            }
+          })
+        },
+      )
+      request.on('timeout', () => request.destroy())
+      request.on('error', (error) => {
+        resolve((error as { code?: string }).code === 'ECONNREFUSED' ? 'none' : 'other')
+      })
+      request.end()
+    })
+  }
+
+  /**
+   * Serves the interface, or leaves it to the server that already does.
+   *
+   * Never throws over a taken port. Another proton-mcp on it is the ordinary
+   * case with several sessions; this server then tries every few seconds to
+   * take over, so the interface survives the session that started it. Anything
+   * else on the port is reported once, and taken over too if it ever leaves.
+   */
+  async start(): Promise<string> {
+    if (this.running) return this.url
 
     const wanted = this.#options.port ?? DEFAULT_WEB_PORT
-    // Port 0 means "any free port" and needs no retry loop.
-    const attempts = wanted === 0 ? 1 : PORT_ATTEMPTS
-    let server: Server | undefined
-    let lastError: Error | undefined
+    const failure = await this.#listen(wanted)
+    if (!failure) return this.url
 
-    for (let i = 0; i < attempts; i++) {
-      const candidate = wanted === 0 ? 0 : wanted + i
-      // A fresh instance per attempt: after a failed listen() the old one is not
-      // reliably reusable.
-      const attempt = build()
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const onError = (error: Error) => reject(error)
-          attempt.once('error', onError)
-          // Explicitly loopback: binding to 0.0.0.0 would put a page that stores
-          // credentials onto the network.
-          attempt.listen(candidate, BIND_ADDRESS, () => {
-            attempt.removeListener('error', onError)
-            resolve()
-          })
-        })
-        server = attempt
-        lastError = undefined
-        break
-      } catch (error) {
-        attempt.close()
-        lastError = error as Error
-        if ((error as { code?: string }).code !== 'EADDRINUSE') break
-        // Taken, most likely by another instance of this server. Try the next.
-      }
+    if ((failure as { code?: string }).code !== 'EADDRINUSE' || wanted === 0) {
+      throw new Error(`The web interface could not start: ${failure.message}`)
     }
 
-    if (!server || lastError) {
-      const code = (lastError as { code?: string } | undefined)?.code
-      throw new Error(
-        code === 'EADDRINUSE'
-          ? `Ports ${wanted} to ${wanted + attempts - 1} are all in use, so the web interface ` +
-            'could not start. Set PROTON_MCP_WEB_PORT to a free port.'
-          : `The web interface could not start: ${lastError?.message ?? 'unknown reason'}`,
+    this.#occupant = await WebInterface.probe(wanted)
+    if (this.#occupant === 'other') {
+      this.#notify(
+        `port ${wanted} is held by a program that is not proton-mcp, so the web interface is not ` +
+          'available. Set PROTON_MCP_WEB_PORT to a free port for every proton-mcp, or stop that ' +
+          'program. This server takes the port as soon as it is free.',
       )
     }
-
-    const address = server.address()
-    this.#port = typeof address === 'object' && address ? address.port : 0
-    this.#server = server
+    this.#scheduleTakeover(wanted)
     return this.url
   }
 
+  #scheduleTakeover(port: number): void {
+    if (this.#takeover) return
+    this.#takeover = setInterval(() => {
+      void (async () => {
+        if (this.running) return
+        if (await this.#listen(port)) {
+          // Still taken. Find out by whom, so the status stays honest.
+          this.#occupant = await WebInterface.probe(port)
+          return
+        }
+        clearInterval(this.#takeover)
+        this.#takeover = undefined
+        this.#notify(`took over the web interface at ${this.url}`)
+      })()
+    }, this.#options.takeoverIntervalMs ?? TAKEOVER_INTERVAL_MS)
+    // Waiting to take over must not keep the process alive on its own.
+    this.#takeover.unref()
+  }
+
   async stop(): Promise<void> {
+    if (this.#takeover) clearInterval(this.#takeover)
+    this.#takeover = undefined
     const server = this.#server
     this.#server = undefined
     if (!server) return
+    this.#options.onServingChange?.(false)
 
     // close() alone only stops accepting new connections and then waits for the
     // existing ones. A browser keeps its connection alive, so a single open tab
@@ -329,12 +454,6 @@ export class WebInterface {
     server.closeIdleConnections()
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
-  }
-
-  /** Invalidates the current link and issues a new one. */
-  rotateToken(): string {
-    this.#secrets = createSession()
-    return this.url
   }
 
   #send(response: ServerResponse, status: number, contentType: string, body: string): void {
@@ -359,9 +478,9 @@ export class WebInterface {
       return
     }
 
-    // Answered before the token check and without a log line. Browsers ask for
-    // it on every page view, and each one would otherwise be recorded as a
-    // refused request, which buries the refusals that mean something.
+    // Answered before the checks and without a log line. Browsers ask for it on
+    // every page view, and each one would otherwise be recorded as a refused
+    // request, which buries the refusals that mean something.
     if (path === '/favicon.ico') {
       response.writeHead(404, { ...securityHeaders(), 'Content-Length': '0' })
       response.end()
@@ -384,7 +503,6 @@ export class WebInterface {
       request,
       secrets: this.#secrets,
       port: this.#port,
-      presentedToken: url.searchParams.get('token') ?? undefined,
       writing,
       ...(writing ? { csrf: { purpose, presented: body.fields.csrf } } : {}),
     })
@@ -398,18 +516,34 @@ export class WebInterface {
     }
 
     if (method === 'GET') {
+      if (path === '/health') {
+        response.writeHead(200, { ...securityHeaders(), 'Content-Type': 'application/json' })
+        response.end(HEALTH_BODY)
+        return
+      }
       const section = SECTION_PATHS[path]
       if (section) {
         await this.#render(section, response)
         return
       }
-      // The message waiting for an answer. Its own path rather than a section,
-      // because it exists only while a question is open and is reached from a
-      // link in that question.
-      if (path.startsWith('/pending/')) {
-        await this.#renderPending(response, path.slice('/pending/'.length))
+    }
+
+    // The PIN, for every change. A wrong one is the user's mistake and gets a
+    // page that says so, unlike the refusals above, which say nothing.
+    if (writing && !WITHOUT_PIN.has(path)) {
+      const refusal = await this.#checkPin(body.fields.pin)
+      if (refusal) {
+        await this.#render(FORM_SECTIONS[path] ?? 'overview', response, {
+          error: refusal,
+          ...(path === '/sign-in' && body.fields.address ? { address: body.fields.address } : {}),
+        })
         return
       }
+    }
+
+    if (writing && path === '/pin') {
+      await this.#handlePin(response, body.fields)
+      return
     }
     if (writing && path === '/dismiss-notice') {
       await this.#handleDismissNotice(response, body.fields)
@@ -472,12 +606,12 @@ export class WebInterface {
   ): Promise<void> {
     const { error, notice, address, store, showAdvanced } = outcome
     const status = await this.#options.getStatus()
-    const token = this.#secrets.accessToken
+    const pinRequired = this.#options.getPin?.() !== undefined
     const disclaimer = this.#disclaimerFor(section)
 
     if (!status.connected && status.locked) {
       const page = unlockPage({
-        token,
+        pinRequired,
         disclaimer,
         csrf: csrfToken(this.#secrets, '/unlock'),
         csrfDiscard: csrfToken(this.#secrets, '/discard-encrypted'),
@@ -491,7 +625,7 @@ export class WebInterface {
     if (!status.connected) {
       const stores = await listStores()
       const page = loginPage({
-        token,
+        pinRequired,
         disclaimer,
         csrf: csrfToken(this.#secrets, '/sign-in'),
         stores,
@@ -512,6 +646,7 @@ export class WebInterface {
 
     const banners = {
       disclaimer,
+      pinRequired,
       ...(error ? { error } : {}),
       ...(notice ? { notice } : {}),
     }
@@ -522,12 +657,11 @@ export class WebInterface {
     let page: string
     switch (section) {
       case 'mailboxes':
-        page = await this.#renderMailboxes(token, banners)
+        page = await this.#renderMailboxes(banners)
         break
 
       case 'bridge':
         page = bridgeSection({
-          token,
           csrfSettings: csrfToken(this.#secrets, '/settings'),
           csrfTest: csrfToken(this.#secrets, '/test-connection'),
           bridgeHost: status.bridgeHost,
@@ -542,7 +676,6 @@ export class WebInterface {
 
       case 'credentials':
         page = credentialsSection({
-          token,
           csrfSignOut: csrfToken(this.#secrets, '/sign-out'),
           ...(status.address ? { address: status.address } : {}),
           ...(status.storeKind ? { storeKind: status.storeKind } : {}),
@@ -551,16 +684,23 @@ export class WebInterface {
         })
         break
 
+      case 'permissions':
+        page = permissionsSection({
+          csrfPin: csrfToken(this.#secrets, '/pin'),
+          ...banners,
+        })
+        break
+
       case 'activity': {
         const activity = this.#options.getActivity?.() ?? { running: [], recent: [] }
-        page = activitySection({ token, ...activity, ...banners })
+        page = activitySection({ ...activity, ...banners })
         break
       }
 
       default:
         page = overviewSection({
-          token,
           connected: true,
+          ...(this.#options.getServers ? { servers: this.#options.getServers() } : {}),
           ...(status.address ? { address: status.address } : {}),
           ...storeTitle,
           ...(status.mailboxCount !== undefined ? { mailboxCount: status.mailboxCount } : {}),
@@ -580,38 +720,84 @@ export class WebInterface {
   }
 
   /**
-   * Shows a message that is waiting to be sent.
+   * Checks the PIN of a change. Returns why it was refused, or nothing.
    *
-   * Deliberately not a section: it is reached from the confirmation, exists
-   * only while that question is unanswered, and belongs to no part of the
-   * navigation. A digest nobody is holding gives the empty page rather than a
-   * refusal, because the ordinary reason to land here is having answered
-   * already.
-   *
-   * **No answer is given here.** The page carries no button and must not grow
-   * one: the token in this address reaches the assistant, so a control here
-   * could be operated by the thing being supervised.
+   * No PIN set means nothing to check: then anything on this machine can make
+   * changes, which the pages say. Too many wrong attempts lock out every attempt
+   * for a while, the right one included, so the lock cannot be used to tell
+   * when a guess was right.
    */
-  async #renderPending(response: ServerResponse, digest: string): Promise<void> {
-    const status = await this.#options.getStatus()
-    const token = this.#secrets.accessToken
-    const disclaimer = this.#disclaimerFor('none')
+  async #checkPin(presented: string | undefined): Promise<string | undefined> {
+    const stored = this.#options.getPin?.()
+    if (!stored) return undefined
+    if (!this.#limiter.allowed()) {
+      return 'Too many wrong PINs. Changes are refused for a minute, whichever PIN is entered.'
+    }
+    if (presented && (await pinMatches(presented, stored))) {
+      this.#limiter.reset()
+      return undefined
+    }
+    this.#limiter.fail()
+    this.#notify('web interface refused a change with a wrong or missing PIN')
+    return presented ? 'The PIN is not right.' : 'This change needs the PIN.'
+  }
 
-    // Nobody signed in means nothing can be waiting, and the sign-in form is
-    // the more useful answer than an empty preview.
-    if (!status.connected) {
-      await this.#render('overview', response)
+  /**
+   * Sets, changes or removes the PIN.
+   *
+   * Changing and removing have passed the PIN check before this runs, like
+   * every other change. Setting one where none exists needs nothing, because
+   * until then anything could have changed anything anyway.
+   */
+  async #handlePin(response: ServerResponse, fields: Record<string, string>): Promise<void> {
+    if (!this.#options.onPinChange) {
+      await this.#render('permissions', response, {
+        error: 'This server cannot store a PIN.',
+      })
+      return
+    }
+    const action = fields.action
+    const existing = this.#options.getPin?.()
+
+    if (action === 'remove') {
+      const failure = await this.#options.onPinChange(undefined)
+      await this.#render('permissions', response,
+        failure
+          ? { error: failure }
+          : { notice: 'The PIN is removed. Anything on this machine can change these settings again.' },
+      )
       return
     }
 
-    const waiting = /^[0-9a-f]{64}$/.test(digest)
-      ? this.#options.getPending?.(digest)
-      : undefined
+    if (action !== 'set' && action !== 'change') {
+      await this.#render('permissions', response)
+      return
+    }
+    if (action === 'set' && existing) {
+      await this.#render('permissions', response, {
+        error: 'A PIN is set already. Change it with the current one.',
+      })
+      return
+    }
 
-    const page = waiting
-      ? pendingPage({ ...waiting, token, disclaimer })
-      : noPendingPage(token, disclaimer)
-    this.#send(response, 200, 'text/html; charset=utf-8', page)
+    const next = fields.next ?? ''
+    const problem = pinProblem(next)
+    if (problem) {
+      await this.#render('permissions', response, { error: problem })
+      return
+    }
+    if (next !== (fields.nextRepeat ?? '')) {
+      await this.#render('permissions', response, { error: 'The two PINs do not match.' })
+      return
+    }
+
+    const failure = await this.#options.onPinChange(await hashPin(next))
+    this.#limiter.reset()
+    await this.#render('permissions', response,
+      failure
+        ? { error: failure }
+        : { notice: action === 'set' ? 'The PIN is set.' : 'The PIN is changed.' },
+    )
   }
 
   /**
@@ -653,8 +839,7 @@ export class WebInterface {
    * question left here is whether the Bridge answers.
    */
   async #renderMailboxes(
-    token: string,
-    banners: { error?: string; notice?: string; disclaimer: DisclaimerState },
+    banners: { error?: string; notice?: string; disclaimer: DisclaimerState; pinRequired: boolean },
   ): Promise<string> {
     let mailboxes: Awaited<ReturnType<NonNullable<WebInterfaceOptions['getMailboxes']>>> = []
     let error: string | undefined = banners.error
@@ -667,8 +852,8 @@ export class WebInterface {
     }
 
     return mailboxSection({
-      token,
       mailboxes,
+      pinRequired: banners.pinRequired,
       disclaimer: banners.disclaimer,
       ...(error ? { error } : {}),
       ...(banners.notice ? { notice: banners.notice } : {}),

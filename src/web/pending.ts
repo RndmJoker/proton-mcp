@@ -8,10 +8,14 @@
  * read.
  *
  * **The answer is not given here.** There is no confirm button on this page and
- * there must never be one. The access token for this interface reaches the
- * assistant through `open_configuration`, so a button here could be pressed by
- * the thing being supervised. The question is answered through the client,
- * where it goes through a person.
+ * there must never be one. The link to it travels through the client and so
+ * reaches the assistant, which can open it with a browser tool, so a button here
+ * could be pressed by the thing being supervised. The question is answered
+ * through the client, where it goes through a person.
+ *
+ * Served by the server that asked, on a port of its own, rather than by the
+ * shared interface: the message is held in the memory of that one server, and
+ * a decrypted message has no business travelling to another process.
  *
  * ## Rendering somebody else's markup
  *
@@ -35,7 +39,6 @@ export interface PendingUrl {
 }
 
 export interface PendingData {
-  token: string
   disclaimer: DisclaimerState
   /** Which tool asked, so the page says what would actually happen. */
   tool: string
@@ -234,7 +237,6 @@ for. They are visible in the preview above.</p>
   return layout({
     title: 'Waiting to be sent',
     section: 'none',
-    token: data.token,
     disclaimer: data.disclaimer,
     body: `<h1>${escapeHtml(what)} is waiting for your answer</h1>
 <p class="lead">Nothing has been sent. Read it here, then answer the question in your assistant.
@@ -264,11 +266,10 @@ ${quoted}`,
 }
 
 /** Shown when a preview is asked for that is no longer waiting. */
-export function noPendingPage(token: string, disclaimer: DisclaimerState): string {
+export function noPendingPage(disclaimer: DisclaimerState): string {
   return layout({
     title: 'Nothing waiting',
     section: 'none',
-    token,
     disclaimer,
     body: `<h1>Nothing is waiting to be sent</h1>
 <p class="lead">Either the question was already answered, or it was asked long enough ago that the

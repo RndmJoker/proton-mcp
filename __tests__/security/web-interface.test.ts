@@ -9,7 +9,12 @@ import {
   isAllowedOrigin,
   safeEqual,
   securityHeaders,
+  hashPin,
+  pinMatches,
+  pinProblem,
+  AttemptLimiter,
   REFERRER_POLICY,
+  type StoredPin,
 } from '../../src/web/security.js'
 
 /**
@@ -22,7 +27,6 @@ import {
 
 let web: WebInterface
 let url: URL
-let token: string
 let signIns: Array<{ user: string; pass: string; store: string }> = []
 let signOuts = 0
 let connected = false
@@ -59,7 +63,6 @@ beforeEach(async () => {
   })
   const started = await web.start()
   url = new URL(started)
-  token = url.searchParams.get('token') ?? ''
 })
 
 afterEach(async () => {
@@ -110,52 +113,214 @@ function send(options: {
   })
 }
 
-describe('access token', () => {
-  it('serves the page with the right token', async () => {
-    const res = await send({ path: `/?token=${token}` })
+describe('one fixed address, no token', () => {
+  it('serves the page at its plain address', async () => {
+    // Until 2026-11-05 a token in the address kept local programs out. It also
+    // reached the assistant, so it kept out everything but the party that
+    // matters. What guards changes now is the PIN, tested below.
+    const res = await send({ path: '/' })
     expect(res.status).toBe(200)
     expect(res.body).toContain('Connect to Proton Mail Bridge')
   })
 
-  it('refuses a request without a token', async () => {
-    // Any local program can reach 127.0.0.1. Without a secret it could drive
-    // this interface.
-    const res = await send({ path: '/' })
-    expect(res.status).toBe(404)
-    expect(res.body).not.toContain('Connect to Proton Mail Bridge')
-  })
-
-  it('refuses a wrong token', async () => {
-    const res = await send({ path: '/?token=wrong' })
-    expect(res.status).toBe(404)
-  })
-
-  it('refuses a token that is only a prefix of the real one', async () => {
-    const res = await send({ path: `/?token=${token.slice(0, -1)}` })
-    expect(res.status).toBe(404)
-  })
-
-  it('refuses a token with something appended', async () => {
-    const res = await send({ path: `/?token=${token}x` })
-    expect(res.status).toBe(404)
+  it('names itself at /health and says nothing else', async () => {
+    const res = await send({ path: '/health' })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({ app: 'proton-mcp' })
   })
 
   it('answers every rejection identically, whatever the reason', async () => {
     // Telling a caller which check failed would help them work around it.
-    const noToken = await send({ path: '/' })
-    const badToken = await send({ path: '/?token=nope' })
-    const badPath = await send({ path: `/nonexistent?token=${token}` })
-    expect(noToken.status).toBe(badToken.status)
-    expect(noToken.body).toBe(badToken.body)
-    expect(badPath.status).toBe(noToken.status)
+    const badHost = await send({ path: '/', host: 'evil.example.com' })
+    const badPath = await send({ path: '/nonexistent' })
+    expect(badHost.status).toBe(404)
+    expect(badPath.status).toBe(404)
+    expect(badHost.body).toBe(badPath.body)
+  })
+})
+
+describe('the PIN', () => {
+  const form = (fields: Record<string, string>) => new URLSearchParams(fields).toString()
+  let pinWeb: WebInterface
+  let stored: StoredPin | undefined
+  let outs: number
+
+  /** Like send(), but against the interface with a PIN. */
+  function sendPin(path: string, fields?: Record<string, string>) {
+    const port = pinWeb.port
+    return new Promise<Response>((resolve, reject) => {
+      const body = fields ? form(fields) : undefined
+      const headers: Record<string, string> = { Host: `127.0.0.1:${port}` }
+      if (body !== undefined) {
+        headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        headers['Content-Length'] = String(Buffer.byteLength(body))
+        headers.Origin = `http://127.0.0.1:${port}`
+      }
+      const req = httpRequest(
+        { hostname: '127.0.0.1', port, path, method: body === undefined ? 'GET' : 'POST', headers },
+        (res) => {
+          const chunks: Buffer[] = []
+          res.on('data', (c: Buffer) => chunks.push(c))
+          res.on('end', () =>
+            resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }),
+          )
+        },
+      )
+      req.on('error', reject)
+      if (body !== undefined) req.write(body)
+      req.end()
+    })
+  }
+
+  /** The CSRF token of the form posting to `action`, read from the page as a browser would. */
+  async function csrfFor(page: string, action: string): Promise<string> {
+    const body = (await sendPin(page)).body
+    const part = body.split(`action="${action}"`)[1] ?? ''
+    return /name="csrf" value="([^"]+)"/.exec(part)?.[1] ?? ''
+  }
+
+  beforeEach(async () => {
+    stored = await hashPin('correct horse')
+    outs = 0
+    pinWeb = new WebInterface({
+      port: 0,
+      getPin: () => stored,
+      onPinChange: async (next) => {
+        stored = next
+        return undefined
+      },
+      onSignIn: async () => undefined,
+      onSignOut: async () => {
+        outs++
+      },
+      getStatus: async () => ({
+        connected: true,
+        address: 'someone@example.com',
+        bridgeHost: '127.0.0.1',
+        bridgeImapPort: 1143,
+        bridgeSmtpPort: 1025,
+      }),
+      notify: () => undefined,
+    })
+    await pinWeb.start()
   })
 
-  it('invalidates the old link when the token is rotated', async () => {
-    const before = await send({ path: `/?token=${token}` })
-    expect(before.status).toBe(200)
-    web.rotateToken()
-    const after = await send({ path: `/?token=${token}` })
-    expect(after.status).toBe(404)
+  afterEach(async () => {
+    await pinWeb.stop()
+  })
+
+  it('asks for it in every form that changes something', async () => {
+    const page = await sendPin('/credentials')
+    expect(page.body).toContain('name="pin"')
+  })
+
+  it('refuses a change without it, and says why instead of answering 404', async () => {
+    const csrf = await csrfFor('/credentials', '/sign-out')
+    const res = await sendPin('/sign-out', { csrf })
+    expect(res.status).toBe(200)
+    expect(res.body).toContain('This change needs the PIN.')
+    expect(outs).toBe(0)
+  })
+
+  it('refuses a wrong one', async () => {
+    const csrf = await csrfFor('/credentials', '/sign-out')
+    const res = await sendPin('/sign-out', { csrf, pin: 'wrong horse' })
+    expect(res.body).toContain('The PIN is not right.')
+    expect(outs).toBe(0)
+  })
+
+  it('lets the change through with the right one', async () => {
+    const csrf = await csrfFor('/credentials', '/sign-out')
+    await sendPin('/sign-out', { csrf, pin: 'correct horse' })
+    expect(outs).toBe(1)
+  })
+
+  it('locks out after five wrong ones, the right one included', async () => {
+    // A lock the right answer opens early tells the guesser when they found it.
+    const csrf = await csrfFor('/credentials', '/sign-out')
+    for (let i = 0; i < 5; i++) await sendPin('/sign-out', { csrf, pin: `guess ${i}` })
+    const res = await sendPin('/sign-out', { csrf, pin: 'correct horse' })
+    expect(res.body).toContain('Too many wrong PINs')
+    expect(outs).toBe(0)
+  })
+
+  it('never puts the PIN or its hash into a page', async () => {
+    const pages = await Promise.all(['/', '/permissions', '/credentials', '/bridge'].map((p) => sendPin(p)))
+    for (const page of pages) {
+      expect(page.body).not.toContain(stored!.hash)
+      expect(page.body).not.toContain(stored!.salt)
+      expect(page.body).not.toContain('correct horse')
+    }
+  })
+
+  it('changes it only with the current one, and stores a hash, never the PIN', async () => {
+    const csrf = await csrfFor('/permissions', '/pin')
+    const before = stored
+    await sendPin('/pin', { csrf, action: 'change', pin: 'wrong horse', next: 'new staple', nextRepeat: 'new staple' })
+    expect(stored).toBe(before)
+
+    await sendPin('/pin', { csrf, action: 'change', pin: 'correct horse', next: 'new staple', nextRepeat: 'new staple' })
+    expect(stored).not.toBe(before)
+    expect(JSON.stringify(stored)).not.toContain('new staple')
+    expect(await pinMatches('new staple', stored!)).toBe(true)
+  })
+
+  it('refuses a PIN shorter than six characters', async () => {
+    const csrf = await csrfFor('/permissions', '/pin')
+    const res = await sendPin('/pin', { csrf, action: 'change', pin: 'correct horse', next: '12345', nextRepeat: '12345' })
+    expect(res.body).toContain('at least 6 characters')
+    expect(await pinMatches('correct horse', stored!)).toBe(true)
+  })
+
+  it('removes it only with the current one, and then warns', async () => {
+    const csrf = await csrfFor('/permissions', '/pin')
+    await sendPin('/pin', { csrf, action: 'remove', pin: 'wrong horse' })
+    expect(stored).toBeDefined()
+    const res = await sendPin('/pin', { csrf, action: 'remove', pin: 'correct horse' })
+    expect(stored).toBeUndefined()
+    expect(res.body).toContain('Anything on this machine can change these settings again')
+  })
+
+  it('warns on the overview while none is set', async () => {
+    stored = undefined
+    const res = await sendPin('/')
+    expect(res.body).toContain('the assistant included')
+  })
+})
+
+describe('the PIN helpers', () => {
+  it('derives the same hash only from the same PIN and salt', async () => {
+    const a = await hashPin('same pin here')
+    const b = await hashPin('same pin here')
+    expect(a.salt).not.toBe(b.salt)
+    expect(a.hash).not.toBe(b.hash)
+    expect(await pinMatches('same pin here', a)).toBe(true)
+    expect(await pinMatches('same pin here!', a)).toBe(false)
+  })
+
+  it('treats composed and decomposed umlauts as the same PIN', async () => {
+    // A PIN typed on one keyboard has to match the same PIN typed on another.
+    // Built from code points so the file stays plain ASCII.
+    const composed = `Br${String.fromCodePoint(0xfc)}cke-7`
+    const decomposed = `Bru${String.fromCodePoint(0x308)}cke-7`
+    expect(composed).not.toBe(decomposed)
+    const stored = await hashPin(composed)
+    expect(await pinMatches(decomposed, stored)).toBe(true)
+  })
+
+  it('names what is wrong with an unusable PIN', () => {
+    expect(pinProblem('12345')).toContain('at least 6')
+    expect(pinProblem('x'.repeat(129))).toContain('at most 128')
+    expect(pinProblem('123456')).toBeUndefined()
+  })
+
+  it('limits attempts within a window and forgets them after it', () => {
+    const limiter = new AttemptLimiter(2, 1000)
+    expect(limiter.allowed(0)).toBe(true)
+    limiter.fail(0)
+    limiter.fail(10)
+    expect(limiter.allowed(20)).toBe(false)
+    expect(limiter.allowed(1011)).toBe(true)
   })
 })
 
@@ -165,25 +330,25 @@ describe('DNS rebinding', () => {
     // name at 127.0.0.1, and the browser sends the request with that Host. The
     // browser considers the page same-origin with it, so origin rules do not
     // help.
-    const res = await send({ path: `/?token=${token}`, host: 'evil.example.com' })
+    const res = await send({ path: `/`, host: 'evil.example.com' })
     expect(res.status).toBe(404)
     expect(res.body).not.toContain('Connect to Proton Mail Bridge')
   })
 
-  it('refuses a foreign Host even with a valid token and port', async () => {
-    const res = await send({ path: `/?token=${token}`, host: `evil.example.com:${web.port}` })
+  it('refuses a foreign Host even with the right port', async () => {
+    const res = await send({ path: `/`, host: `evil.example.com:${web.port}` })
     expect(res.status).toBe(404)
   })
 
   it('accepts the loopback names', async () => {
     for (const host of [`127.0.0.1:${web.port}`, `localhost:${web.port}`]) {
-      const res = await send({ path: `/?token=${token}`, host })
+      const res = await send({ path: `/`, host })
       expect(res.status).toBe(200)
     }
   })
 
   it('refuses a Host that merely contains a loopback name', async () => {
-    const res = await send({ path: `/?token=${token}`, host: 'localhost.evil.example.com' })
+    const res = await send({ path: `/`, host: 'localhost.evil.example.com' })
     expect(res.status).toBe(404)
   })
 })
@@ -194,14 +359,14 @@ describe('cross-site requests', () => {
   it('accepts a sign-in with a matching csrf token', async () => {
     const secrets = createSession()
     // The real token has to come from the page, so fetch it first.
-    const page = await send({ path: `/?token=${token}` })
+    const page = await send({ path: `/` })
     const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] ?? ''
     expect(csrf).not.toBe('')
     expect(csrf).not.toBe(csrfToken(secrets, '/sign-in'))
 
     const res = await send({
       method: 'POST',
-      path: `/sign-in?token=${token}`,
+      path: `/sign-in`,
       // The master password fields ride along even though this test is about
       // csrf. Which store is preselected depends on whether this machine has a
       // working keyring, and the encrypted file rightly refuses to be set up
@@ -222,7 +387,7 @@ describe('cross-site requests', () => {
   it('refuses a write without a csrf token', async () => {
     const res = await send({
       method: 'POST',
-      path: `/sign-in?token=${token}`,
+      path: `/sign-in`,
       body: form({ address: 'a@example.com', password: 'secret' }),
     })
     expect(res.status).toBe(404)
@@ -231,11 +396,11 @@ describe('cross-site requests', () => {
 
   it('refuses a csrf token issued for another action', async () => {
     // Otherwise a token lifted from one form could drive another.
-    const page = await send({ path: `/?token=${token}` })
+    const page = await send({ path: `/` })
     const signInCsrf = /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] ?? ''
     const res = await send({
       method: 'POST',
-      path: `/sign-out?token=${token}`,
+      path: `/sign-out`,
       body: form({ csrf: signInCsrf }),
     })
     expect(res.status).toBe(404)
@@ -243,11 +408,11 @@ describe('cross-site requests', () => {
   })
 
   it('refuses a write from a foreign origin', async () => {
-    const page = await send({ path: `/?token=${token}` })
+    const page = await send({ path: `/` })
     const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] ?? ''
     const res = await send({
       method: 'POST',
-      path: `/sign-in?token=${token}`,
+      path: `/sign-in`,
       origin: 'https://evil.example.com',
       body: form({ csrf, address: 'a@example.com', password: 'secret' }),
     })
@@ -257,11 +422,11 @@ describe('cross-site requests', () => {
 
   it('refuses an opaque origin', async () => {
     // What a sandboxed iframe sends.
-    const page = await send({ path: `/?token=${token}` })
+    const page = await send({ path: `/` })
     const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] ?? ''
     const res = await send({
       method: 'POST',
-      path: `/sign-in?token=${token}`,
+      path: `/sign-in`,
       origin: 'null',
       body: form({ csrf, address: 'a@example.com', password: 'secret' }),
     })
@@ -285,7 +450,7 @@ describe('cross-site requests', () => {
 describe('request handling', () => {
   it('refuses methods other than GET and POST', async () => {
     for (const method of ['PUT', 'DELETE', 'PATCH', 'TRACE']) {
-      const res = await send({ method, path: `/?token=${token}` })
+      const res = await send({ method, path: `/` })
       expect([404, 405]).toContain(res.status)
     }
   })
@@ -293,7 +458,7 @@ describe('request handling', () => {
   it('refuses an oversized body instead of buffering it', async () => {
     const res = await send({
       method: 'POST',
-      path: `/sign-in?token=${token}`,
+      path: `/sign-in`,
       body: 'x'.repeat(200_000),
     })
     expect([404, 413]).toContain(res.status)
@@ -307,7 +472,7 @@ describe('request handling', () => {
       '/%2e%2e%2fpackage.json',
       '/static/../../package.json',
     ]) {
-      const res = await send({ path: `${path}?token=${token}` })
+      const res = await send({ path: `${path}` })
       expect(res.status).toBe(404)
       expect(res.body).not.toContain('"name"')
       expect(res.body).not.toContain('root:')
@@ -317,7 +482,7 @@ describe('request handling', () => {
 
 describe('response headers', () => {
   it('sends a content security policy that forbids loading anything', async () => {
-    const res = await send({ path: `/?token=${token}` })
+    const res = await send({ path: `/` })
     const csp = String(res.headers['content-security-policy'])
     expect(csp).toContain("default-src 'none'")
     expect(csp).toContain("frame-ancestors 'none'")
@@ -325,7 +490,7 @@ describe('response headers', () => {
   })
 
   it('forbids framing and sniffing, and keeps referrers on this origin', async () => {
-    const res = await send({ path: `/?token=${token}` })
+    const res = await send({ path: `/` })
     expect(res.headers['x-frame-options']).toBe('DENY')
     expect(res.headers['x-content-type-options']).toBe('nosniff')
     // Deliberately same-origin and not no-referrer. This assertion used to
@@ -338,7 +503,7 @@ describe('response headers', () => {
   })
 
   it('forbids caching, so a later user cannot read the page from disk', async () => {
-    const res = await send({ path: `/?token=${token}` })
+    const res = await send({ path: `/` })
     expect(String(res.headers['cache-control'])).toContain('no-store')
   })
 
@@ -381,26 +546,26 @@ describe('binding', () => {
 
 describe('the page itself', () => {
   it('states that this is not an official Proton project', async () => {
-    const res = await send({ path: `/?token=${token}` })
+    const res = await send({ path: `/` })
     expect(res.body).toContain('not made by, affiliated with or endorsed by Proton AG')
     expect(res.body).toContain('unofficial')
   })
 
   it('uses no Proton logo or wordmark, only a palette', async () => {
     // Trademarks. Borrowing the colours is fine, the marks are not.
-    const res = await send({ path: `/?token=${token}` })
+    const res = await send({ path: `/` })
     expect(res.body).not.toMatch(/<img/i)
     expect(res.body).not.toMatch(/\.svg/i)
     expect(res.body).not.toMatch(/proton\.me/i)
   })
 
   it('warns that the Bridge password is not the account password', async () => {
-    const res = await send({ path: `/?token=${token}` })
+    const res = await send({ path: `/` })
     expect(res.body).toContain('Not your Proton account password')
   })
 
   it('shows all four storage options with both sides', async () => {
-    const res = await send({ path: `/?token=${token}` })
+    const res = await send({ path: `/` })
     for (const title of ['System keyring', 'Encrypted file', 'This session only', 'Plain file']) {
       expect(res.body).toContain(title)
     }
@@ -409,7 +574,7 @@ describe('the page itself', () => {
   })
 
   it('loads nothing from the network', async () => {
-    const res = await send({ path: `/?token=${token}` })
+    const res = await send({ path: `/` })
     expect(res.body).not.toMatch(/https?:\/\/(?!127\.0\.0\.1)/)
   })
 })

@@ -48,8 +48,8 @@ export const INSTRUCTIONS = [
   '4. Nothing here deletes for good. "Delete" means moving to the trash.',
   '',
   'Everything about this server is seen and changed in a local page, and open_configuration',
-  'returns its address. Hand that address over whenever it is asked for, in whatever words: it',
-  'carries an access token, changes on every restart, and cannot be guessed or remembered.',
+  'returns its address. Hand that address over whenever it is asked for, in whatever words.',
+  'Changes there may need a PIN only the user knows: never ask for it in the conversation.',
   '',
   'Two guides can be read when they are needed:',
   '  proton-mcp://guide/writing   composing messages, formatting, quoting, what the',
@@ -138,8 +138,8 @@ summarised, however many there are.
   \`extended\`, with the ones that really hide something marked as such.
 
 The answer is given in the client, never in the browser. That page has no
-confirm button: its address reaches you through \`open_configuration\`, so a
-control there would be one you could press yourself.
+confirm button: its address travels with the question and so reaches you as
+well, and a control there would be one you could press yourself.
 
 The agreement is bound to that exact message by a fingerprint covering the
 sender, every recipient, the subject, the markup and the contents of each

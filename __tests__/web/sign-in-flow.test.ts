@@ -19,7 +19,6 @@ interface State {
 }
 
 let web: WebInterface
-let token: string
 let state: State
 let signIns: Array<{ user: string; pass: string; store: StoreKind; master?: string }>
 let unlocks: string[]
@@ -97,7 +96,7 @@ beforeEach(async () => {
   discardFailure = undefined
 
   web = build()
-  token = new URL(await web.start()).searchParams.get('token') ?? ''
+  await web.start()
 })
 
 afterEach(async () => {
@@ -149,7 +148,7 @@ function send(path: string, body?: Record<string, string>): Promise<Response> {
  */
 function csrfFrom(body: string, action: string): string {
   // Matches the form for the given action and takes the csrf value inside it.
-  const form = body.split(`action="${action}?token=`)[1] ?? ''
+  const form = body.split(`action="${action}"`)[1] ?? ''
   return /name="csrf" value="([^"]+)"/.exec(form)?.[1] ?? ''
 }
 
@@ -157,7 +156,7 @@ describe('choosing where the password is kept', () => {
   it('offers every option as a radio in the one form', async () => {
     // Choosing used to post and re-render. Everything now travels with the
     // credentials, so picking an option costs no round trip at all.
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     for (const kind of ['keyring', 'encrypted-file', 'session', 'plain-file']) {
       expect(body).toContain(`name="store" id="store-${kind}" value="${kind}"`)
     }
@@ -168,7 +167,7 @@ describe('choosing where the password is kept', () => {
     // Which one depends on the machine, because listStores probes the real
     // keyring here. That exactly one radio is checked does not: a form with
     // none checked would submit no store at all, and one with two is invalid.
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     const checked = body.match(/<input type="radio"[^>]*\schecked/g) ?? []
     expect(checked).toHaveLength(1)
   })
@@ -176,7 +175,7 @@ describe('choosing where the password is kept', () => {
   it('carries the master password fields for every option', async () => {
     // In the document always, shown by CSS for the one store that uses them.
     // Rendering them only for that store is what forced the reload.
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     expect(body).toContain('name="master"')
     expect(body).toContain('name="masterRepeat"')
     expect(body).toContain('if you forget it')
@@ -184,7 +183,7 @@ describe('choosing where the password is kept', () => {
   })
 
   it('carries the plain file warning, closable and not a refusal', async () => {
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     expect(body).toContain('class="warning-layer"')
     expect(body).toContain('The password will be readable')
     expect(body).toContain('for="warning-seen"')
@@ -196,8 +195,8 @@ describe('choosing where the password is kept', () => {
     // The choice is form input now, so a name nobody offered is ordinary
     // untrusted data. It falls back to the recommendation rather than being
     // handed to the session.
-    const first = await send(`/?token=${token}`)
-    const res = await send(`/sign-in?token=${token}`, {
+    const first = await send(`/`)
+    const res = await send(`/sign-in`, {
       csrf: csrfFrom(first.body, '/sign-in'),
       store: 'somewhere-else',
       address: 'someone@example.com',
@@ -216,7 +215,7 @@ describe('choosing where the password is kept', () => {
 
 describe('the advanced block on the sign-in page', () => {
   it('is folded away and prefilled with what the server will use', async () => {
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     expect(body).toContain('<details class="card advanced">')
     // Not open: almost nobody needs it, and it must not be the first thing read.
     expect(body).not.toContain('<details class="card advanced" open>')
@@ -227,7 +226,7 @@ describe('the advanced block on the sign-in page', () => {
   it('shows the Bridge address without letting it be changed', async () => {
     // A wrong port means nothing works and you notice. A wrong address means
     // the Bridge password goes to another machine and nobody notices.
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     expect(body).toContain('value="127.0.0.1" disabled')
     expect(body).not.toContain('name="host"')
     expect(body).not.toContain('name="bridgeHost"')
@@ -236,8 +235,8 @@ describe('the advanced block on the sign-in page', () => {
   it('saves the ports before the credentials are tried', async () => {
     // Otherwise a Bridge listening elsewhere reports a wrong password, because
     // the attempt went to a port with nothing behind it.
-    const first = await send(`/?token=${token}`)
-    await send(`/sign-in?token=${token}`, {
+    const first = await send(`/`)
+    await send(`/sign-in`, {
       csrf: csrfFrom(first.body, '/sign-in'),
       store: 'session',
       address: 'someone@example.com',
@@ -250,8 +249,8 @@ describe('the advanced block on the sign-in page', () => {
   })
 
   it('refuses a port that is not one, and opens the block', async () => {
-    const first = await send(`/?token=${token}`)
-    const res = await send(`/sign-in?token=${token}`, {
+    const first = await send(`/`)
+    const res = await send(`/sign-in`, {
       csrf: csrfFrom(first.body, '/sign-in'),
       store: 'session',
       address: 'someone@example.com',
@@ -269,8 +268,8 @@ describe('the advanced block on the sign-in page', () => {
   it('shows the ports as text when the environment set them', async () => {
     await web.stop()
     web = build({ allowPorts: false })
-    token = new URL(await web.start()).searchParams.get('token') ?? ''
-    const { body } = await send(`/?token=${token}`)
+    await web.start()
+    const { body } = await send(`/`)
     expect(body).toContain('come from the environment')
     expect(body).not.toContain('name="imapPort"')
   })
@@ -278,13 +277,13 @@ describe('the advanced block on the sign-in page', () => {
 
 describe('signing in with an encrypted file', () => {
   async function chooseEncrypted(): Promise<string> {
-    const first = await send(`/?token=${token}`)
+    const first = await send(`/`)
     return csrfFrom(first.body, '/sign-in')
   }
 
   it('passes the master password through', async () => {
     const signInCsrf = await chooseEncrypted()
-    const res = await send(`/sign-in?token=${token}`, {
+    const res = await send(`/sign-in`, {
       csrf: signInCsrf,
       store: 'encrypted-file',
       address: 'someone@example.com',
@@ -305,7 +304,7 @@ describe('signing in with an encrypted file', () => {
 
   it('refuses two master passwords that differ', async () => {
     const signInCsrf = await chooseEncrypted()
-    const res = await send(`/sign-in?token=${token}`, {
+    const res = await send(`/sign-in`, {
       csrf: signInCsrf,
       store: 'encrypted-file',
       address: 'someone@example.com',
@@ -321,7 +320,7 @@ describe('signing in with an encrypted file', () => {
 
   it('refuses a missing master password', async () => {
     const signInCsrf = await chooseEncrypted()
-    const res = await send(`/sign-in?token=${token}`, {
+    const res = await send(`/sign-in`, {
       csrf: signInCsrf,
       store: 'encrypted-file',
       address: 'someone@example.com',
@@ -334,7 +333,7 @@ describe('signing in with an encrypted file', () => {
   it('keeps the address after a failed attempt but never the password', async () => {
     failWith = 'the Bridge refused those credentials'
     const signInCsrf = await chooseEncrypted()
-    const res = await send(`/sign-in?token=${token}`, {
+    const res = await send(`/sign-in`, {
       csrf: signInCsrf,
       store: 'encrypted-file',
       address: 'someone@example.com',
@@ -356,7 +355,7 @@ describe('unlocking a stored encrypted file', () => {
   })
 
   it('asks for the master password alone', async () => {
-    const res = await send(`/?token=${token}`)
+    const res = await send(`/`)
     expect(res.body).toContain('Unlock the stored credentials')
     expect(res.body).toContain('name="master"')
     // The Bridge password is already on disk, so asking for it again would be
@@ -366,13 +365,13 @@ describe('unlocking a stored encrypted file', () => {
   })
 
   it('names the file so the user can find it', async () => {
-    const res = await send(`/?token=${token}`)
+    const res = await send(`/`)
     expect(res.body).toContain('/home/someone/.config/proton-mcp/credentials.enc')
   })
 
   it('unlocks with the right password and lands on the overview', async () => {
-    const page = await send(`/?token=${token}`)
-    const res = await send(`/unlock?token=${token}`, {
+    const page = await send(`/`)
+    const res = await send(`/unlock`, {
       csrf: csrfFrom(page.body, '/unlock'),
       master: 'my-master',
     })
@@ -383,8 +382,8 @@ describe('unlocking a stored encrypted file', () => {
 
   it('stays on the unlock page when the password is wrong', async () => {
     failWith = 'The credentials could not be decrypted.'
-    const page = await send(`/?token=${token}`)
-    const res = await send(`/unlock?token=${token}`, {
+    const page = await send(`/`)
+    const res = await send(`/unlock`, {
       csrf: csrfFrom(page.body, '/unlock'),
       master: 'wrong',
     })
@@ -396,8 +395,8 @@ describe('unlocking a stored encrypted file', () => {
   })
 
   it('refuses an empty master password without calling through', async () => {
-    const page = await send(`/?token=${token}`)
-    const res = await send(`/unlock?token=${token}`, {
+    const page = await send(`/`)
+    const res = await send(`/unlock`, {
       csrf: csrfFrom(page.body, '/unlock'),
       master: '',
     })
@@ -406,10 +405,10 @@ describe('unlocking a stored encrypted file', () => {
   })
 
   it('offers a way out for a forgotten master password', async () => {
-    const page = await send(`/?token=${token}`)
+    const page = await send(`/`)
     expect(page.body).toContain('Forgot the master password?')
 
-    const res = await send(`/discard-encrypted?token=${token}`, {
+    const res = await send(`/discard-encrypted`, {
       csrf: csrfFrom(page.body, '/discard-encrypted'),
     })
     expect(discards).toBe(1)
@@ -421,8 +420,8 @@ describe('unlocking a stored encrypted file', () => {
   it('binds the discard form to its own action', async () => {
     // A CSRF token for one action must not work for another, and deleting the
     // stored credentials is the one action where that matters most.
-    const page = await send(`/?token=${token}`)
-    const res = await send(`/discard-encrypted?token=${token}`, {
+    const page = await send(`/`)
+    const res = await send(`/discard-encrypted`, {
       csrf: csrfFrom(page.body, '/unlock'),
     })
     expect(res.status).toBe(404)
@@ -431,8 +430,8 @@ describe('unlocking a stored encrypted file', () => {
 
   it('says why the file could not be thrown away', async () => {
     discardFailure = 'The encrypted file could not be deleted. Delete it by hand.'
-    const page = await send(`/?token=${token}`)
-    const res = await send(`/discard-encrypted?token=${token}`, {
+    const page = await send(`/`)
+    const res = await send(`/discard-encrypted`, {
       csrf: csrfFrom(page.body, '/discard-encrypted'),
     })
     expect(res.body).toContain(discardFailure)
@@ -443,24 +442,24 @@ describe('when not everything stored can be removed', () => {
   it('shows what sign-out left behind, not a clean sign-in form alone (#52)', async () => {
     state.connected = true
     signOutLeft = 'Signed out here, but not everywhere. The keyring entry could not be removed.'
-    const page = await send(`/credentials?token=${token}`)
-    const res = await send(`/sign-out?token=${token}`, { csrf: csrfFrom(page.body, '/sign-out') })
+    const page = await send(`/credentials`)
+    const res = await send(`/sign-out`, { csrf: csrfFrom(page.body, '/sign-out') })
     expect(res.body).toContain(signOutLeft)
     expect(res.body).toContain('Connect to Proton Mail Bridge')
   })
 
   it('shows nothing extra after a clean sign-out', async () => {
     state.connected = true
-    const page = await send(`/credentials?token=${token}`)
-    const res = await send(`/sign-out?token=${token}`, { csrf: csrfFrom(page.body, '/sign-out') })
+    const page = await send(`/credentials`)
+    const res = await send(`/sign-out`, { csrf: csrfFrom(page.body, '/sign-out') })
     expect(res.body).toContain('Connect to Proton Mail Bridge')
     expect(res.body).not.toContain('not everywhere')
   })
 
   it('shows a sign-in that worked but left an earlier password elsewhere (#53)', async () => {
     signInWarning = 'Signed in. An earlier one is still stored elsewhere, though.'
-    const page = await send(`/?token=${token}`)
-    const res = await send(`/sign-in?token=${token}`, {
+    const page = await send(`/`)
+    const res = await send(`/sign-in`, {
       csrf: csrfFrom(page.body, '/sign-in'),
       store: 'session',
       address: 'someone@example.com',
@@ -484,8 +483,8 @@ describe('a browser-shaped request', () => {
    * tests here set Origin themselves, so they all passed while nothing worked.
    */
   it('completes a sign-in with the page-supplied token and origin', async () => {
-    const page = await send(`/?token=${token}`)
-    const res = await send(`/sign-in?token=${token}`, {
+    const page = await send(`/`)
+    const res = await send(`/sign-in`, {
       csrf: csrfFrom(page.body, '/sign-in'),
       store: 'encrypted-file',
       address: 'someone@example.com',
@@ -510,7 +509,6 @@ describe('createSession', () => {
   it('mints different secrets every time', () => {
     const a = createSession()
     const b = createSession()
-    expect(a.accessToken).not.toBe(b.accessToken)
     expect(a.csrfSecret).not.toBe(b.csrfSecret)
   })
 })

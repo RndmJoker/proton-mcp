@@ -1,18 +1,19 @@
 /**
  * Tool: open_configuration
  *
- * Hands out the address of the local web interface, including the access token.
+ * Hands out the address of the local web interface.
  *
  * Why a tool rather than only a line on stderr: most clients hide a server's
  * stderr, so a user who wants to reach the interface would have to go digging
  * through logs. Asking the assistant is the obvious move, and this makes it
  * work.
  *
- * The token does end up in the conversation. That is a deliberate trade: it
- * grants access to a page on loopback that shows configuration and state, never
- * message content, and it is worthless from any other machine. It changes with
- * every restart. The alternative, making the user hunt for a log line, would
- * mostly result in nobody using the interface at all.
+ * Since 2026-11-05 the address is fixed and carries no token. Every running
+ * server shares the one interface, and changes there are guarded by a PIN the
+ * user may set, which this tool never sees. Handing the address to the
+ * assistant therefore gives it nothing it could not have guessed; what keeps
+ * it from changing settings is the PIN, and the answer says so when none is
+ * set.
  */
 
 import * as z from 'zod'
@@ -23,7 +24,12 @@ import { track } from '../in-flight.js'
 
 export interface InterfaceInfo {
   url: () => string
+  /** True when this server serves the interface itself. */
   running: () => boolean
+  /** True when the interface answers at the address, from this server or another. */
+  reachable?: () => boolean
+  /** True while a PIN guards changes in the interface. */
+  pinSet?: () => boolean
   signedIn: () => boolean
   address: () => string | undefined
   storeKind: () => StoreKind | undefined
@@ -41,25 +47,28 @@ export function registerInterfaceTool(server: McpServer, info: InterfaceInfo): v
         'server does and is where everything about this server can be seen and changed. Give it ' +
         'to the user whenever they ask for the interface, the panel, the settings, the web page, ' +
         'the address or the link, however they phrase it, and also when they ask where to sign ' +
-        'in, where to see what has been sent, where the folders are listed, or when another tool ' +
-        'reports that no credentials are available. The address contains an access token and ' +
-        'changes every time the server restarts, so it cannot be remembered from an earlier ' +
-        'conversation and has to be asked for again.',
+        'in, where to see what has been sent, where the folders are listed, what the assistant ' +
+        'is allowed to do, or when another tool reports that no credentials are available. The ' +
+        'address is fixed and shared by every running server; changes on the page may need a ' +
+        'PIN that only the user knows and that must never be asked for in the conversation.',
       inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async () =>
       track(async () => {
-        if (!info.running()) {
+        const reachable = info.reachable?.() ?? info.running()
+        if (!reachable) {
           const failure: CallToolResult = {
             content: [
               {
                 type: 'text' as const,
                 text:
-                  'The configuration interface is not running. It failed to start, most likely ' +
-                  'because its port was in use. Set PROTON_MCP_WEB_PORT to a free port and restart ' +
-                  'the server. Credentials can still be provided through the BRIDGE_USER and ' +
-                  'BRIDGE_PASS environment variables.',
+                  `The configuration interface is not available at ${info.url()}. Its port is ` +
+                  'held by a program that is not proton-mcp. Tell the user to stop that program ' +
+                  'or to set PROTON_MCP_WEB_PORT to a free port, the same one for every ' +
+                  'proton-mcp they run. This server takes the port over as soon as it is free. ' +
+                  'Credentials can still be provided through the BRIDGE_USER and BRIDGE_PASS ' +
+                  'environment variables.',
               },
             ],
             isError: true,
@@ -68,6 +77,13 @@ export function registerInterfaceTool(server: McpServer, info: InterfaceInfo): v
         }
 
         const lines: string[] = [`Configuration interface: ${info.url()}`, '']
+        if (!info.running()) {
+          lines.push(
+            'Another running proton-mcp serves it right now. It shows every running server and',
+            'its sign-in, this one included.',
+            '',
+          )
+        }
 
         if (info.signedIn()) {
           const kind = info.storeKind()
@@ -100,7 +116,11 @@ export function registerInterfaceTool(server: McpServer, info: InterfaceInfo): v
 
         lines.push(
           '',
-          'The address is only reachable from this machine and the token changes on every restart.',
+          'The address is only reachable from this machine and stays the same across restarts.',
+          info.pinSet?.() === true
+            ? 'Changes on the page need the PIN the user set. Never ask for it here.'
+            : 'No PIN is set, so anything on this machine can change the settings there. The ' +
+              'user can set one on the Permissions page.',
         )
 
         const answer: CallToolResult = { content: [{ type: 'text', text: lines.join('\n') }] }

@@ -17,6 +17,7 @@ import {
   formatDuration,
   errorBanner,
   noticeBanner,
+  pinField,
   type Section,
   type DisclaimerState,
 } from './layout.js'
@@ -24,7 +25,8 @@ import type { StoreKind } from '../credentials/store.js'
 
 /** What every section needs to draw itself. */
 interface Common {
-  token: string
+  /** True while a PIN is set: then every form that changes something asks for it. */
+  pinRequired?: boolean
   error?: string
   notice?: string
   /**
@@ -54,10 +56,21 @@ function frame(section: Section, title: string, data: Common, body: string): str
   return layout({
     title,
     section,
-    token: data.token,
     disclaimer: data.disclaimer,
     body: `${errorBanner(data.error)}${noticeBanner(data.notice)}${body}`,
   })
+}
+
+/** One running server, as the overview lists it. Never a password. */
+export interface ServerSummary {
+  pid: number
+  version: string
+  startedAt: number
+  signedIn: boolean
+  address?: string
+  storeTitle?: string
+  /** True for the server that shows this page. */
+  servesInterface: boolean
 }
 
 export interface OverviewData extends Common {
@@ -73,6 +86,42 @@ export interface OverviewData extends Common {
   bridgeHost: string
   bridgeImapPort: number
   bridgeSmtpPort: number
+  /** Every server running on this machine, this one included. */
+  servers?: ServerSummary[]
+}
+
+/**
+ * The running servers, one row each.
+ *
+ * Every client session starts its own server, and all of them share this page.
+ * A sign-in kept only in the memory of the server that shows the page ("this
+ * session only" or an encrypted file still being open) does not reach the
+ * others, and this table is where that becomes visible rather than puzzling.
+ */
+function serverTable(servers: ServerSummary[] | undefined): string {
+  if (!servers || servers.length === 0) return ''
+  const rows = servers
+    .map((server) => {
+      const who = server.signedIn
+        ? `signed in as ${escapeHtml(server.address ?? 'unknown')}` +
+          (server.storeTitle ? `, kept in ${escapeHtml(server.storeTitle)}` : '')
+        : 'not signed in'
+      const mark = server.servesInterface ? ' <span class="state good">shows this page</span>' : ''
+      return (
+        `<tr><td><code>${server.pid}</code>${mark}</td><td>${who}</td>` +
+        `<td>${escapeHtml(server.version)}</td><td>${escapeHtml(formatTime(server.startedAt))}</td></tr>`
+      )
+    })
+    .join('\n')
+  return `<h2>Running servers (${servers.length})</h2>
+<div class="card"><table>
+<tr><th>Process</th><th>Sign-in</th><th>Version</th><th>Started</th></tr>
+${rows}
+</table>
+<p class="hint">Each assistant session starts its own server, and all of them share this page and
+its settings. A password kept in the system keyring or in a file reaches every one of them. One kept
+for this session only, or in an encrypted file opened here, stays with the server that shows this
+page.</p></div>`
 }
 
 /**
@@ -95,6 +144,13 @@ export function overviewSection(data: OverviewData): string {
     row('Bridge IMAP', `${data.bridgeHost}:${data.bridgeImapPort}`),
     row('Bridge SMTP', `${data.bridgeHost}:${data.bridgeSmtpPort}`),
     row('This interface', `127.0.0.1:${data.webPort}`),
+    row(
+      'Changes here',
+      data.pinRequired
+        ? '<span class="state good">need the PIN</span>'
+        : '<span class="state bad">anything on this machine can make them, the assistant included</span>',
+      true,
+    ),
     row('Server running for', formatDuration(data.uptimeMs)),
   ]
 
@@ -114,7 +170,8 @@ export function overviewSection(data: OverviewData): string {
 interface: it is for configuration and state, not a mail client.</p>
 
 <div class="card"><table>${rows.join('\n')}</table></div>
-${counters.length > 0 ? `<h2>Mailbox counts</h2>\n<div class="card"><table>${counters.join('\n')}</table></div>` : ''}`,
+${counters.length > 0 ? `<h2>Mailbox counts</h2>\n<div class="card"><table>${counters.join('\n')}</table></div>` : ''}
+${serverTable(data.servers)}`,
   )
 }
 
@@ -139,7 +196,7 @@ export function bridgeSection(data: BridgeData): string {
     ? `<p class="hint">The ports come from the environment (<code>BRIDGE_IMAP_PORT</code> or
     <code>BRIDGE_SMTP_PORT</code>), so they are not changed here. An explicit setting stays
     explicit.</p>`
-    : `<form method="post" action="/settings?token=${escapeHtml(data.token)}">
+    : `<form method="post" action="/settings">
   <input type="hidden" name="csrf" value="${escapeHtml(data.csrfSettings)}">
   <label for="imapPort">IMAP port</label>
   <input id="imapPort" name="imapPort" type="text" inputmode="numeric"
@@ -151,6 +208,7 @@ export function bridgeSection(data: BridgeData): string {
   that is not running. You find the real ones in the Bridge under settings. The host is not
   changeable here on purpose: it would be a field that sends your Bridge password to another
   machine.</p>
+  ${pinField(data.pinRequired === true)}
   <button type="submit">Save ports</button>
 </form>`
 
@@ -178,7 +236,7 @@ to. The host stays at <code>${escapeHtml(data.bridgeHost)}</code> and cannot be 
 
 <h2>Connection test</h2>
 <div class="card">
-<form method="post" action="/test-connection?token=${escapeHtml(data.token)}">
+<form method="post" action="/test-connection">
   <input type="hidden" name="csrf" value="${escapeHtml(data.csrfTest)}">
   <p>Checks that the Bridge answers on the ports below and accepts the stored credentials.</p>
   <button type="submit">Test the connection</button>
@@ -217,10 +275,11 @@ ${row('Kept in', data.storeTitle ?? 'nowhere yet')}
 
 <h2>Sign out</h2>
 <div class="card">
-<form method="post" action="/sign-out?token=${escapeHtml(data.token)}">
+<form method="post" action="/sign-out">
   <input type="hidden" name="csrf" value="${escapeHtml(data.csrfSignOut)}">
   <p>Removes the stored credentials from wherever they are kept, everywhere at once, and
-  disconnects.</p>
+  disconnects. Every running server signs out with it.</p>
+  ${pinField(data.pinRequired === true)}
   <button type="submit" class="danger">Sign out and forget credentials</button>
 </form>
 </div>`,
@@ -326,5 +385,67 @@ ${part.map((m) => `<tr><td><code>${escapeHtml(m.path)}</code></td></tr>`).join('
 <p class="lead">Names only, never contents. Proton distinguishes folders, where a message lives in
 exactly one, from labels, where it can carry any number.</p>
 ${sections || '<div class="card"><p class="hint">No mailboxes were returned.</p></div>'}`,
+  )
+}
+
+export interface PermissionsData extends Common {
+  csrfPin: string
+}
+
+/**
+ * What the assistant may do, and who may change that.
+ *
+ * The PIN comes first on this page because everything else on it depends on
+ * it. Without one, the settings here are only as safe as every program on this
+ * machine, the assistant included: it can open this address with a browser
+ * tool as easily as the user can. The page says so plainly instead of leaving
+ * it to be discovered.
+ */
+export function permissionsSection(data: PermissionsData): string {
+  const pin = data.pinRequired
+    ? `<p>A PIN is set. Every change in this interface asks for it.</p>
+<form method="post" action="/pin">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfPin)}">
+  <input type="hidden" name="action" value="change">
+  ${pinField(true)}
+  <label for="next">New PIN</label>
+  <input id="next" name="next" type="password" autocomplete="new-password">
+  <label for="nextRepeat">New PIN again</label>
+  <input id="nextRepeat" name="nextRepeat" type="password" autocomplete="new-password">
+  <button type="submit">Change the PIN</button>
+</form>
+<form method="post" action="/pin">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfPin)}">
+  <input type="hidden" name="action" value="remove">
+  ${pinField(true)}
+  <button type="submit" class="danger">Remove the PIN</button>
+</form>`
+    : `<div class="error">No PIN is set. Anything running on this machine can change the settings
+here, and so can an assistant with a browser tool, which may then allow itself more than you meant
+to.</div>
+<form method="post" action="/pin">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfPin)}">
+  <input type="hidden" name="action" value="set">
+  <label for="next">PIN</label>
+  <input id="next" name="next" type="password" autocomplete="new-password">
+  <label for="nextRepeat">PIN again</label>
+  <input id="nextRepeat" name="nextRepeat" type="password" autocomplete="new-password">
+  <p class="hint">At least 6 characters. It is stored only as a salted hash and never shown to the
+  assistant. Type it only into a tab you are using yourself: a tab an assistant is driving at that
+  moment can read what is typed into it. A forgotten PIN is removed by deleting the line
+  <code>"pin"</code> from the settings file.</p>
+  <button type="submit">Set the PIN</button>
+</form>`
+
+  return frame(
+    'permissions',
+    'Permissions',
+    data,
+    `<h1>Permissions</h1>
+<p class="lead">What an assistant may do through this server, and who may change that. Settings
+made here apply to every running server at once.</p>
+
+<h2>PIN</h2>
+<div class="card">${pin}</div>`,
   )
 }

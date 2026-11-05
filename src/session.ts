@@ -56,9 +56,12 @@ export class Session {
   readonly #notify: (message: string) => void
   /** Set once startup has looked for stored credentials. */
   #restored = false
+  /** True when the credentials came from the environment, which nothing here overrules. */
+  readonly #fromEnvironment: boolean
 
   constructor(options: SessionOptions = {}) {
     this.#notify = options.notify ?? ((m) => process.stderr.write(`proton-mcp: ${m}\n`))
+    this.#fromEnvironment = options.fromEnvironment !== undefined
 
     // Taken up right away rather than on first use. Reading the environment
     // costs nothing and cannot block, and leaving it for later made the status
@@ -246,6 +249,25 @@ export class Session {
     this.#masterPassword = undefined
     this.#restored = true
     return left
+  }
+
+  /**
+   * Forgets credentials restored from a shared store, so the next use reads it again.
+   *
+   * Called when another running server signed in or out through the interface
+   * they all share. What the store holds may have changed, and the copy in this
+   * process would otherwise outlive a sign-out made somewhere else.
+   *
+   * Credentials from the environment are kept, because nothing in the interface
+   * overrules them. So are those held only in this process, for this session or
+   * from an encrypted file opened here: no other server can have changed them.
+   */
+  reloadShared(): void {
+    if (this.#fromEnvironment) return
+    if (this.#storeKind === 'session' || this.#storeKind === 'encrypted-file') return
+    this.#credentials = undefined
+    this.#storeKind = undefined
+    this.#restored = false
   }
 
   /** Empties every store but the one named, and says which could not be emptied. */

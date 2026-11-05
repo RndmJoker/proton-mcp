@@ -41,7 +41,7 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `send_reply` | Replies and sends, keeping the conversation intact |
 | `send_forward` | Forwards and sends, attachments and all |
 | `send_draft` | Sends a draft that is already written, exactly as it was stored |
-| `open_configuration` | Hands back the address of the local web interface, with the token that opens it |
+| `open_configuration` | Hands back the address of the local web interface, the same for every running server |
 | `check_for_updates` | Asks npm whether a newer version exists. The only thing here that contacts anything but your own machine, and only when called |
 | `manage_filters` | Reads and changes nothing. Filters are out of this server's reach, so it answers with the way through Proton's own settings page, where you agree to each change |
 
@@ -53,17 +53,18 @@ The server also tells an assistant how it works, so the rules are not something 
 
 Underneath: a held IMAP connection that recovers from a Bridge restart, stable identifiers based on the Message-ID, HTML to text conversion, filtering of the public key Proton attaches to every sent message, and a character budget so a single message cannot exhaust a context window.
 
-There is also a **local web interface**, on `127.0.0.1` only, running for as long as the server does. It is divided into sections, reached from a rail on the left:
+There is also a **local web interface**, on `127.0.0.1` only, at one fixed address: `http://127.0.0.1:7345/` unless `PROTON_MCP_WEB_PORT` says otherwise. Every assistant session starts its own server, and all of them share this one interface and its settings: the first one to start serves it, and when that one stops, the next takes over. It is divided into sections, reached from a rail on the left:
 
 | Section | What is there |
 | :--- | :--- |
-| Overview | Connection, address, where the password is kept, read-only mode, both Bridge ports, uptime and counters. State only: every control lives in the section it acts on |
+| Overview | Connection, address, where the password is kept, read-only mode, both Bridge ports, whether changes need a PIN, uptime and counters, and every running server with its sign-in. State only: every control lives in the section it acts on |
 | Folders and labels | On its own page, only when asked. They belong to the whole account, so a folder named after a bank gives that away on its own |
 | Bridge | The ports, the pinned certificate, and a button that tries the connection. Ports are stored in `~/.config/proton-mcp/settings.json`; an explicit environment variable wins and the form disappears |
-| Credentials | Where the Bridge password is kept, and signing out, which clears it from every store at once |
+| Credentials | Where the Bridge password is kept, and signing out, which clears it from every store at once and signs out every running server |
+| Permissions | The PIN that every change in this interface asks for, once you set one |
 | Activity | What is running and for how long, plus the last 50 finished calls. Tool names and timings only, never arguments |
 
-One more appears only while a message is waiting for you to confirm it, linked from that question: the message rendered as the recipient will see it, every address in full, every alt text, every attachment. It is the one place this interface shows mail, and it carries no confirm button by design.
+One more page appears only while a message is waiting for you to confirm it, linked from that question: the message rendered as the recipient will see it, every address in full, every alt text, every attachment. It is the one place that shows mail, and it carries no confirm button by design. It is served by the server that asked, on a port of its own, because the message is held in that server's memory and nowhere else.
 
 Before signing in there are two more: the sign-in form, where the address and Bridge password go into the browser rather than into a client configuration or a conversation, with four places to keep the password and the cost of each stated; and the unlock page, which after a restart asks for the master password alone, since the Bridge password is already on disk.
 
@@ -211,6 +212,8 @@ If you pick the encrypted file, every later start shows an unlock page asking fo
 
 **Signing in again replaces what was stored.** The password then lives only where you chose last, and every other place is emptied. **Signing out empties all four.** If one of them cannot be emptied, a file the server may not delete for instance, the page says which and how to remove it by hand, because until then the next start signs in with it again.
 
+**With several sessions running**, a password kept in the system keyring or in a file reaches every one of their servers, which reread it whenever you sign in or out. One kept for this session only, or in an encrypted file opened in the interface, stays with the server that shows the interface, because it lives in that server's memory alone. The overview lists every running server with its sign-in, so this is visible rather than puzzling.
+
 #### Without a browser
 
 Environment variables still work and take precedence over anything stored:
@@ -333,7 +336,8 @@ Only these, all under `~/.config/proton-mcp/` (on Windows `%USERPROFILE%\.config
 | File | When | What is in it |
 | :--- | :--- | :--- |
 | `known-certificate.json` | On the first connection | The Bridge's certificate and its fingerprint |
-| `settings.json` | When you change the ports or dismiss the notice in the interface | The two Bridge ports, and whether the notice that this is not an official Proton tool was dismissed |
+| `settings.json` | When you change something in the interface | The two Bridge ports, whether the notice that this is not an official Proton tool was dismissed, the PIN as a salted hash, and a counter that tells every running server to reread the stored credentials |
+| `run/instances/` | While servers run | One small file per running server: process id, version, start time, whether it is signed in and as which address, and whether it serves the interface. No password |
 | `credentials.enc` | Only if you chose the encrypted file | Your Bridge password, encrypted with your master password |
 | `env` | Only if you chose the plain file, or put it there yourself | Your Bridge password in plain text |
 | `saved-attachments/` | While attachments are saved | Which files this server saved, so it can delete exactly those again. No content |
@@ -376,10 +380,12 @@ The directory has to exist; it is not created for you, so that a mistyped path d
 
 It binds to `127.0.0.1` and there is no option to change that. It is not remote access and cannot be made into it. Four defences, each against a specific attack:
 
-- **A token in the URL**, generated per process and never written down. Any other program on your machine can reach `127.0.0.1`; without the token it can do nothing here.
+- **An optional PIN on every change.** Until 0.4.13 a token in the address kept other programs out, but that address reached the assistant, so it kept out everything except the one party the interface is meant to supervise. Set a PIN on the Permissions page and every change there asks for it: the assistant never sees it, so it can open the page but change nothing. It is stored only as a salted scrypt hash, and five wrong attempts lock changes for a minute. **Without a PIN, anything running on your machine can change the settings, an assistant with a browser tool included**, and the interface says so. Type the PIN only into a tab you are using yourself, since a tab an assistant drives at that moment can read what is typed into it. A forgotten PIN is removed by deleting the line `"pin"` from `settings.json`.
 - **A Host header check.** A page on the internet can point its own domain at `127.0.0.1` and have your browser send requests there, which the browser then treats as same-origin with that domain. Only loopback names are accepted. This is DNS rebinding, and it is the attack local servers most often forget.
 - **An Origin check and a per-action CSRF token** on everything that changes something, so a token for one action cannot be replayed against another.
 - **A strict Content-Security-Policy.** Nothing may be loaded from anywhere and nothing can reach the network. The interface also serves no files from disk at all, which removes path traversal as a category rather than guarding against it.
+
+Reading needs nothing: any program on your machine can open the pages, including the one listing your folder names. On a machine shared with other people, keep that in mind.
 
 It shows no message content, with exactly one exception: a message waiting for you to confirm it. That page renders it as the recipient will see it, and lists every address, alt text and attachment. The message is held in memory only, dropped as soon as you answer either way, and gone after fifteen minutes. Somebody else's markup, which a reply carries as its quote, is rendered in a frame with no permissions at all, and images from the internet are not loaded: a tracking pixel must not tell its author that you looked.
 

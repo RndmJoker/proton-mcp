@@ -25,7 +25,10 @@ import { Connection } from './bridge/connection.js'
 import { loadPinned, pinPath } from './bridge/certificate.js'
 import { Session } from './session.js'
 import { encryptedFilePath } from './credentials/encrypted-file.js'
-import { loadSettings, saveSettings } from './settings.js'
+import { loadSettings, updateSettings, watchSettings, type StoredSettings } from './settings.js'
+import { registerInstance, listInstances } from './instances.js'
+import { STORE_DESCRIPTIONS } from './credentials/store.js'
+import { PreviewServer } from './web/preview-server.js'
 import * as activity from './activity.js'
 import { WebInterface, type StatusSnapshot } from './web/server.js'
 import { registerListFolders } from './tools/list-folders.js'
@@ -38,7 +41,7 @@ import { registerSendTools } from './tools/send.js'
 import { registerSavedAttachmentTools } from './tools/saved.js'
 import { SavedAttachments } from './mail/saved-attachments.js'
 import type { PendingSend } from './tools/confirm.js'
-import { setSignInHint, setLockedCheck } from './tools/failures.js'
+import { setSignInHint, setLockedCheck, setPreviewBase } from './tools/failures.js'
 import { pendingView } from './tools/pending-view.js'
 import { setHandshakeCapabilities } from './tools/capabilities.js'
 import { registerGuidance, INSTRUCTIONS } from './tools/guidance.js'
@@ -89,11 +92,19 @@ async function main(): Promise<void> {
   // Stored ports fill in only where the environment said nothing. An explicit
   // BRIDGE_IMAP_PORT has to keep meaning what it says.
   const explicitPorts = portsSetExplicitly()
-  // Held rather than read once: every write goes through the whole object, so
-  // that saving one setting cannot drop another. saveSettings replaces the file.
-  const settings = await loadSettings()
+  // The settings shared by every running server. Held here and replaced
+  // whenever the file changes, whichever server changed it. Writes go through
+  // updateSettings, which reads the file first, so that a change made here
+  // cannot undo one made by another server a moment earlier.
+  let settings: StoredSettings = await loadSettings()
   if (!explicitPorts.imapPort && settings.imapPort !== undefined) config.imapPort = settings.imapPort
   if (!explicitPorts.smtpPort && settings.smtpPort !== undefined) config.smtpPort = settings.smtpPort
+  /**
+   * The sign-in counter as this server last knew it. A higher number in the
+   * file means somebody signed in or out through the interface, possibly in
+   * another server, and the stored credentials have to be read again.
+   */
+  let knownGeneration = settings.credentialsGeneration ?? 0
 
   const environmentCredentials = credentialsFromEnvironment()
   const session = new Session({
@@ -133,8 +144,73 @@ async function main(): Promise<void> {
     }
   }
 
+  // This server's entry in the list of running servers the interface shows.
+  // Nothing in it is secret: who is signed in is on the overview page anyway.
+  const instance = registerInstance({
+    pid: process.pid,
+    version: VERSION,
+    startedAt,
+    signedIn: session.signedIn,
+    servesInterface: false,
+    ...(session.address ? { address: session.address } : {}),
+    ...(session.storeKind ? { storeKind: session.storeKind } : {}),
+  })
+  const refreshInstance = (): void => {
+    instance.update({
+      signedIn: session.signedIn,
+      address: session.address,
+      storeKind: session.storeKind,
+    })
+  }
+  // The session restores credentials lazily, on the first tool call, so the
+  // entry is brought up to date now and then rather than only on sign-in.
+  setInterval(refreshInstance, 15_000).unref()
+  process.on('exit', () => instance.remove())
+
+  /**
+   * Tells every other running server that the stored credentials changed.
+   *
+   * The counter is raised in the shared settings, and each server rereads the
+   * stores when it sees that. This server raises its own idea of the number
+   * first, so it does not throw away the sign-in it just made.
+   */
+  const announceCredentials = async (): Promise<void> => {
+    try {
+      settings = await updateSettings((current) => {
+        knownGeneration = (current.credentialsGeneration ?? 0) + 1
+        return { ...current, credentialsGeneration: knownGeneration }
+      })
+    } catch (error) {
+      notify(`other running servers could not be told about the sign-in: ${(error as Error).message}`)
+    }
+  }
+
   const web = new WebInterface({
     port: config.webPort,
+    getPin: () => settings.pin,
+    onPinChange: async (next) => {
+      try {
+        settings = await updateSettings((current) => {
+          const { pin: _old, ...rest } = current
+          return next ? { ...rest, pin: next } : rest
+        })
+      } catch (error) {
+        return `The PIN could not be saved: ${(error as Error).message}`
+      }
+      notify(next ? 'a PIN now guards changes in the web interface' : 'the PIN of the web interface was removed')
+      return undefined
+    },
+    getServers: () =>
+      listInstances().map((entry) => ({
+        pid: entry.pid,
+        version: entry.version,
+        startedAt: entry.startedAt,
+        signedIn: entry.signedIn,
+        servesInterface: entry.servesInterface,
+        ...(entry.address ? { address: entry.address } : {}),
+        ...(entry.storeKind ? { storeTitle: STORE_DESCRIPTIONS[entry.storeKind].title } : {}),
+      })),
+    onServingChange: (serving) => instance.update({ servesInterface: serving }),
     onSignIn: async (credentials, storeKind, masterPassword) => {
       const failure = await verify(credentials)
       if (failure) return failure
@@ -146,6 +222,8 @@ async function main(): Promise<void> {
       }
       // Drop the old connection so the next call uses the new credentials.
       await connection.close()
+      refreshInstance()
+      await announceCredentials()
       if (left.length === 0) return undefined
       return {
         warning:
@@ -157,6 +235,8 @@ async function main(): Promise<void> {
     onSignOut: async () => {
       const left = await session.signOut()
       await connection.close()
+      refreshInstance()
+      await announceCredentials()
       if (left.length === 0) return undefined
       return (
         `Signed out here, but not everywhere. ${left.join(' ')} Until that is done, the next start ` +
@@ -239,12 +319,10 @@ async function main(): Promise<void> {
       : {
           onPorts: async (ports) => {
             try {
-              await saveSettings({ ...settings, ...ports })
+              settings = await updateSettings((current) => ({ ...current, ...ports }))
             } catch (error) {
               return `The ports could not be saved: ${(error as Error).message}`
             }
-            settings.imapPort = ports.imapPort
-            settings.smtpPort = ports.smtpPort
             // The Connection reads this object on every reconnect, so closing
             // the current one is all that is needed for the change to take.
             config.imapPort = ports.imapPort
@@ -254,14 +332,11 @@ async function main(): Promise<void> {
             return undefined
           },
         }),
-    // The message behind an open confirmation, for the page that shows it.
-    // Held in memory by preview.ts and dropped as soon as the answer arrives.
-    getPending: (digest) => pendingView(digest),
     noticeDismissed: () => settings.noticeDismissed === true,
     onDismissNotice: async () => {
-      settings.noticeDismissed = true
+      settings = { ...settings, noticeDismissed: true }
       try {
-        await saveSettings(settings)
+        settings = await updateSettings((current) => ({ ...current, noticeDismissed: true }))
       } catch (error) {
         // Worth a line, not worth failing over: the notice is hidden for this
         // run either way, and the next start simply shows it again.
@@ -300,9 +375,43 @@ async function main(): Promise<void> {
     notify,
   })
 
+  // Follows the shared settings file, whichever server wrote it. Ports set in
+  // the environment stay as they are; a raised sign-in counter means the
+  // credentials changed through the interface, possibly in another server.
+  const stopWatching = watchSettings((next) => {
+    settings = next
+    let reconnect = false
+    if (!explicitPorts.imapPort && next.imapPort !== undefined && next.imapPort !== config.imapPort) {
+      config.imapPort = next.imapPort
+      reconnect = true
+    }
+    if (!explicitPorts.smtpPort && next.smtpPort !== undefined && next.smtpPort !== config.smtpPort) {
+      config.smtpPort = next.smtpPort
+      reconnect = true
+    }
+    const generation = next.credentialsGeneration ?? 0
+    if (generation !== knownGeneration) {
+      knownGeneration = generation
+      session.reloadShared()
+      reconnect = true
+    }
+    if (reconnect) void connection.close()
+    refreshInstance()
+  })
+
+  // Messages waiting for confirmation are shown by this server itself, on a
+  // port of its own: they are held in its memory and nowhere else.
+  const preview = new PreviewServer({ getPending: (digest) => pendingView(digest), notify })
+  try {
+    await preview.start()
+  } catch (error) {
+    notify(`messages waiting for confirmation cannot be previewed: ${(error as Error).message}`)
+  }
+  setPreviewBase((digest) => preview.urlFor(digest))
+
   // Every tool answer about a missing sign-in names this address, so the model
   // sends the user there instead of asking for the password in the chat.
-  setSignInHint(() => (web.running ? web.url : undefined))
+  setSignInHint(() => (web.reachable ? web.url : undefined))
   // So that a tool called while an encrypted file is still closed says what is
   // actually missing: the master password, not the Bridge password.
   setLockedCheck(() => session.locked())
@@ -310,7 +419,8 @@ async function main(): Promise<void> {
   let webUrl: string | undefined
   try {
     webUrl = await web.start()
-    notify(`web interface at ${webUrl}`)
+    if (web.running) notify(`web interface at ${webUrl}`)
+    else if (web.reachable) notify(`web interface at ${webUrl}, served by another running proton-mcp`)
     if (!session.signedIn && !environmentCredentials) {
       // Asking the session restores from a store, which is what makes this
       // message true. Without it the answer is always "nothing stored": the
@@ -398,6 +508,8 @@ async function main(): Promise<void> {
     registerInterfaceTool(server, {
       url: () => web.url,
       running: () => web.running,
+      reachable: () => web.reachable,
+      pinSet: () => settings.pin !== undefined,
       signedIn: () => session.signedIn,
       address: () => session.address,
       storeKind: () => session.storeKind,
@@ -429,7 +541,10 @@ async function main(): Promise<void> {
 
     try {
       saved.stop()
+      stopWatching()
+      instance.remove()
       await web.stop()
+      await preview.stop()
       await connection.close()
       await handle.close()
     } finally {

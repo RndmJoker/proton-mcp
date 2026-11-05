@@ -57,6 +57,7 @@ export function setLockedCheck(check: () => Promise<boolean>): void {
 export function _clearSignInHint(): void {
   signInHint = undefined
   lockedCheck = undefined
+  previewBase = undefined
 }
 
 /** The sign-in address, when the interface is running. */
@@ -65,26 +66,28 @@ export function signInUrl(): string | undefined {
 }
 
 /**
+ * Where this server shows the messages waiting for confirmation.
+ *
+ * Its own source rather than the sign-in address. Since 2026-11-05 every
+ * running server shares one interface, but a waiting message is held only in
+ * the memory of the server that asked, so that server shows it on a port of
+ * its own.
+ */
+let previewBase: ((digest: string) => string | undefined) | undefined
+
+export function setPreviewBase(base: (digest: string) => string | undefined): void {
+  previewBase = base
+}
+
+/**
  * Where a message waiting for confirmation can be read.
  *
- * Built from the same address as the sign-in hint, which already carries the
- * access token: the interface refuses anything without it, so a link that
- * dropped the token would lead to a refusal page rather than to the message.
- *
- * Returns nothing when no interface is running. The confirmation then says so
- * rather than offering a link that goes nowhere, because a question asked with
- * less behind it than usual should say as much.
+ * Returns nothing when this server cannot show previews. The confirmation then
+ * says so rather than offering a link that goes nowhere, because a question
+ * asked with less behind it than usual should say as much.
  */
 export function previewUrl(digest: string): string | undefined {
-  const base = signInHint?.()
-  if (!base) return undefined
-  try {
-    const url = new URL(base)
-    url.pathname = `/pending/${digest}`
-    return url.toString()
-  } catch {
-    return undefined
-  }
+  return previewBase?.(digest)
 }
 
 /** Which of the two situations the caller is in. */
