@@ -178,13 +178,22 @@ export function clientCanConfirm(ctx: unknown): boolean {
  * a wall of them is how the answer became unreachable, and half a wall read
  * halfway is worse than a sentence that says where to look.
  */
-export function describeForConfirmation(draft: Draft, what: string, previewUrl?: string): string {
+export function describeForConfirmation(
+  draft: Draft,
+  what: string,
+  previewUrl?: string,
+  /** Why the question is asked although the tool may send on its own. */
+  heldBack?: string,
+): string {
   const lines = [
     `${what} would be sent from ${showRecipient(draft.from)}.`,
     '',
     describeRecipients(draft),
     `Subject: ${draft.subject || '(no subject)'}`,
   ]
+  if (heldBack) {
+    lines.push('', `This tool may send without asking, but ${heldBack}, so you are asked.`)
+  }
 
   const counts = countsFor(draft)
   if (counts) lines.push('', counts)
@@ -281,12 +290,13 @@ export function confirmationRequest(
   what: string,
   requestState: string,
   previewUrl?: string,
+  heldBack?: string,
 ): InputRequiredResult {
   return inputRequired({
     requestState,
     inputRequests: {
       [CONFIRM_KEY]: inputRequired.elicit({
-        message: describeForConfirmation(draft, what, previewUrl),
+        message: describeForConfirmation(draft, what, previewUrl, heldBack),
         requestedSchema: {
           type: 'object',
           properties: {

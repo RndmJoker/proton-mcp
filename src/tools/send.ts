@@ -50,6 +50,7 @@ import { holdForPreview, releasePreview } from './preview.js'
 import { previewUrl } from './failures.js'
 import { describeFailure, withSignIn } from './failures.js'
 import { track } from '../in-flight.js'
+import type { Permissions } from '../permissions.js'
 
 const ok = (text: string): CallToolResult => ({ content: [{ type: 'text', text }] })
 
@@ -99,6 +100,11 @@ export interface SendDependencies {
   from: () => string | undefined
   /** Seals and opens the state that carries a confirmation across the round trip. */
   codec: RequestStateCodec<PendingSend>
+  /**
+   * What each sending tool may do. Absent means every one asks, which is the
+   * behaviour before levels existed and the default with them.
+   */
+  permissions?: Permissions
 }
 
 function requireFrom(deps: SendDependencies): string {
@@ -140,21 +146,55 @@ async function confirmed(
     )
   }
 
+  const level = deps.permissions?.level(tool) ?? 'ask'
+  if (level === 'off') {
+    // Taken out of the client's list already. A call that arrives anyway is
+    // refused here, with the setting named, rather than trusted.
+    return describeFailure(
+      new BridgeError(
+        `${tool} is switched off for assistants, ${deps.permissions?.where(tool) ?? 'by a setting'}. ` +
+          'Tell the user; only they can switch it on.',
+      ),
+      'sending',
+    )
+  }
+
   const draft = await build()
   const digest = digestOf(draft)
   const pending = pendingSend(ctx)
 
   if (!pending) {
-    // First round. Nothing is sent here under any circumstances.
+    // First round. A tool the user allowed to act on its own sends now, unless
+    // a bound holds it back; then it asks like every other, and says why.
+    let heldBack: string | undefined
+    if (level === 'act' && deps.permissions) {
+      const recipients = [...draft.to, ...draft.cc, ...draft.bcc].map((r) => r.address)
+      const hold = deps.permissions.holdBack(recipients)
+      if (!hold) {
+        const outcome = await sendMessage(deps.config, deps.getCredentials, deps.readOnly(), draft)
+        deps.permissions.recordSent()
+        return ok(
+          `${describeOutcome(draft, outcome)}\n\nSent without asking: ${tool} is allowed to act on ` +
+            `its own, ${deps.permissions.where(tool)}. Say so when reporting it to the user.`,
+        )
+      }
+      heldBack = hold.reason
+    }
+
+    // Nothing is sent from here on in this round under any circumstances.
     if (!clientCanConfirm(ctx)) return refuse.noElicitation()
     const state = await deps.codec.mint({ tool, digest }, ctx as never)
     // Held so the interface can show the message while the question is open.
     // Memory only, and dropped the moment an answer arrives either way.
     holdForPreview(digest, draft, tool)
-    return confirmationRequest(draft, what, state, previewUrl(digest))
+    return confirmationRequest(draft, what, state, previewUrl(digest), heldBack)
   }
 
-  // Second round. The seal has already been verified by the SDK, so what is
+  // Second round: an answer to a question is always taken as the answer, even
+  // if the level changed meanwhile. A tool switched to act on its own between
+  // the question and a "no" must not send what the person declined.
+  //
+  // The seal has already been verified by the SDK, so what is
   // left is whether it says the same thing this call is asking for.
   //
   // The preview is released before any of those checks, and before the send.
@@ -177,11 +217,11 @@ const addressList = (what: string) =>
     .describe(`${what} Each entry is an address, optionally as "Display Name <name@example.com>".`)
 
 const CONFIRMATION_NOTE =
-  'Every send asks the user to confirm first, through the client, showing the sender, every ' +
-  'recipient separated into To, Cc and Bcc, and the subject. It carries no part of the message ' +
-  'itself and links to a page where the whole thing can be read as the recipient will see it. ' +
-  'There is no way to switch that off, and a client that cannot show the question cannot send ' +
-  'at all.'
+  'By default every send asks the user to confirm first, through the client, showing the ' +
+  'sender, every recipient separated into To, Cc and Bcc, and the subject. It carries no part ' +
+  'of the message itself and links to a page where the whole thing can be read as the recipient ' +
+  'will see it, and a client that cannot show the question cannot send. The user can allow a ' +
+  'tool to send without asking, within bounds they choose; the answer then says that it did.'
 
 export function registerSendTools(server: McpServer, deps: SendDependencies): void {
   server.registerTool(

@@ -6,7 +6,7 @@ An MCP server for Proton Mail. It talks to a locally running Proton Mail Bridge 
 >
 > **Largely AI-generated.** Most of the code, tests and documentation in this repository were written by Anthropic's Claude Opus models. I decide what gets built and how, and I note this on every one of my projects that is largely AI-generated.
 
-**Status: under construction.** Reading works and can be used, and so does signing in through the browser. Labels, moving between folders, read state, trash, drafts and sending all work. Every send asks you first, and that question is enforced by the server rather than requested in a prompt. See [Status](#status) for the details.
+**Status: under construction.** Reading works and can be used, and so does signing in through the browser. Labels, moving between folders, read state, trash, drafts and sending all work. By default every send asks you first, and that question is enforced by the server rather than requested in a prompt; you can allow a tool to act on its own, within bounds you choose. See [Status](#status) for the details.
 
 ## Why everything runs locally
 
@@ -274,7 +274,7 @@ The content of someone else's email is text written by strangers, and it is hand
 
 - **Message content is marked as untrusted** in every answer, enclosed in markers and separated from anything the server itself says. The markers carry a label drawn per answer, because a fixed one is written down in this repository: a sender could put the closing marker in the body and have everything after it read as though the server wrote it. A label that changes every time cannot be copied. For the same reason a subject, a display name or an attachment name never breaks across lines, however many line breaks it was sent with; the break is shown, not removed.
 - **Nothing is filtered out of the content** and no attempt is made to detect attacks. Such filters pretend to offer safety they cannot deliver.
-- **Sending always requires your confirmation**, enforced in the server rather than in a system prompt. There is no switch to turn it off, and a client that cannot ask the question cannot send.
+- **Sending requires your confirmation by default**, enforced in the server rather than in a system prompt, and a client that cannot ask the question cannot send. You can allow a sending tool to act on its own; the switch is guarded by the PIN when you set one, the environment can fix it either way, and bounds can limit who it may send to, how often and until when.
 - **There will be no permanent deletion**, and no tool that reads or changes filters, forwarding, account or key settings. A hijacked session must not be able to leave behind lasting access.
 - **HTML is never passed through raw** and external content is never fetched. Tracking pixels stay ineffective.
 - **Your mail is not kept on your disk.** No cache, no index, no copies. Anything this server wrote down would be your mail in plain text, outside the encryption you pay Proton for. The one exception is an attachment you have the assistant save, into a directory you chose, for an hour at most, see [Saved attachments](#saved-attachments).
@@ -310,20 +310,52 @@ One more thing worth knowing about drafts: Proton rewrites the thread headers of
 
 Writes need a moment to settle. A move takes roughly fifteen seconds to reconcile with Proton, and until then the Bridge lists the message in both places, so the tools say so rather than reading back an intermediate state and calling it the result. Flags are the exception: those hold immediately.
 
-### Sending, and the question you cannot switch off
+### Sending, and the question before it
 
 Mail is text written by strangers, handed to a model that can call tools. A message can politely ask to be forwarded somewhere, and other projects answer that with a line in a system prompt. **A system prompt is not a security boundary.** This one lives in the server:
 
-- **Nothing is sent without a person saying yes.** The first call never sends. It returns a question through your client naming the sender, every recipient separated into To, Cc and Bcc, and the subject. Only the second call, carrying your answer, sends.
-- **The question is short, and the message is somewhere with room.** It carries no part of the message itself; it links to a page in the local interface where you can read it as the recipient will see it, with every address in full. That split exists because the question used to grow with the message: 74 lines for a newsletter-shaped one, at which point the confirm button sat below the bottom of the dialog and nothing could be sent at all.
+- **By default, nothing is sent without a person saying yes.** The first call never sends. It returns a question through your client naming the sender, every recipient separated into To, Cc and Bcc, and the subject. Only the second call, carrying your answer, sends.
+- **The question is short, and the message is somewhere with room.** It carries no part of the message itself; it links to a page, served by the server that asks, where you can read it as the recipient will see it, with every address in full. That split exists because the question used to grow with the message: 74 lines for a newsletter-shaped one, at which point the confirm button sat below the bottom of the dialog and nothing could be sent at all.
 - **Recipients are never summarised**, however many there are. Seeing three of eight would mean agreeing to a send to five strangers.
 - **The address you confirm is the address the message goes to.** Every recipient is read back through the code that builds the envelope, and refused if it would come out as another address or as none. An address with a character outside ASCII is refused as well: letters from another script can spell a familiar domain, and the message would go to a different one that anyone can register. A domain that really is written with such letters can be given in its `xn--` form, which is then exactly what you confirm.
-- **The answer goes through your client, never through the browser.** That page has no confirm button and will not get one: the address of the interface reaches your assistant, so a control there could be operated by the thing it is supervising.
-- **There is no setting that turns the question off.** Not an environment variable, not an argument, not a mode.
+- **The answer goes through your client, never through the browser.** That page has no confirm button and will not get one: its address travels with the question and so reaches your assistant, so a control there could be operated by the thing it is supervising.
+- **You can switch the question off, per tool, and nobody else can when a PIN is set.** See [What the assistant may do](#what-the-assistant-may-do) below. Off is the default, and an answer the server already asked for always stands: a "no" given after the level changed is still a no.
 - **A client that cannot ask cannot send.** If your client does not support form elicitation, sending is refused and you are pointed at drafts instead. That is deliberately different from the sign-in prompt, which falls back to text: the worst outcome there is an inconvenience, and here it is a message that cannot be recalled. What counts as "can ask" is the capability your client declares, read from the request when the protocol revision carries it there and from the handshake otherwise.
 - **Your yes covers one specific message.** A fingerprint of the sender, every recipient, the subject and the body is sealed with an HMAC whose key exists only in the running process, and it travels with the question. On the way back the fingerprint is recomputed from what is being asked for now. If a single address was added in between, nothing is sent. A confirmation is also bound to the tool that asked, so one cannot be reused for another.
 - **Blind copies stay blind.** They travel in the envelope and never appear in the headers the recipients see. Verified against a real delivery.
 - **The Bridge password is protected on the way out too.** IMAP and SMTP are both verified against the same pinned certificate, and on both STARTTLS is required rather than merely attempted. Something listening on the port that offers no encryption gets no password.
+
+### What the assistant may do
+
+Every tool that can be switched has a level, chosen on the Permissions page of the interface or in the environment, which wins:
+
+| Level | What the tool does |
+| :--- | :--- |
+| `off` | Is taken away from the assistant entirely. It disappears from the list your client sees, and a call that arrives anyway is refused |
+| `ask first` | Runs only after you agree through your client. Every sending tool does this by default, and only the sending tools can |
+| `act on its own` | Runs without asking. Every other tool does this by default |
+
+**Nothing changes on an upgrade:** the defaults are the behaviour before levels existed. `open_configuration` and `check_for_updates` are always there and have no level.
+
+In the environment, three lists take tool names or the groups `reading`, `filing`, `writing` and `sending`. A tool named on its own wins over its group, and anything contradictory or unknown stops the server at start rather than letting it run with permissions nobody chose:
+
+```
+PROTON_MCP_OFF=trash_messages,send_forward
+PROTON_MCP_ASK_FIRST=send_draft
+PROTON_MCP_ACT_ON_ITS_OWN=send_reply
+```
+
+`PROTON_MCP_READ_ONLY=true` still works and switches every tool that changes something off, whatever else says otherwise.
+
+**Sending without asking costs something, and the Permissions page says so where you switch it on:** your private mail, text written by strangers and a way out are then together with no person in between. A single message can ask for your mailbox to be forwarded, and nobody would see it happen. Three bounds make that smaller, each one optional, set on the same page or in the environment:
+
+| Bound | Environment | What happens outside it |
+| :--- | :--- | :--- |
+| Permitted recipients, full addresses or domains written as `@example.com` | `PROTON_MCP_SEND_ALLOWED` | The send asks first |
+| A maximum per hour, counted per running server | `PROTON_MCP_SEND_MAX_PER_HOUR` | The send asks first |
+| A last day, written YYYY-MM-DD | `PROTON_MCP_ACT_UNTIL` | Every send asks first again |
+
+A send outside a bound becomes a question, not a failure, and the question says which bound held it back. A send that went out without asking says so in its answer, and the overview of the interface lists every tool whose level departs from the default. **Without a PIN, anything on your machine can change these levels, the assistant included**, so set one before you allow sending without asking, or set the levels in the environment.
 
 Replying and forwarding exist as sending tools of their own, not just as drafts. The reason is measured: Proton rewrites the thread headers of anything it stores, so a reply written to a draft and sent later loses the chain, while a reply handed straight to SMTP keeps its `In-Reply-To` and stays in the conversation.
 

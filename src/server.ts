@@ -14,6 +14,16 @@
 import { createRequire } from 'node:module'
 import { randomBytes } from 'node:crypto'
 import { McpServer, createRequestStateCodec } from '@modelcontextprotocol/server'
+import type { RegisteredTool } from '@modelcontextprotocol/server'
+import {
+  Permissions,
+  PermissionsError,
+  CONTROLLED,
+  GROUPS,
+  defaultLevel,
+  levelsFor,
+  type Group,
+} from './permissions.js'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import {
   loadConfig,
@@ -105,6 +115,35 @@ async function main(): Promise<void> {
    * another server, and the stored credentials have to be read again.
    */
   let knownGeneration = settings.credentialsGeneration ?? 0
+
+  // What the assistant may do, tool by tool. A mistake in the environment stops
+  // the start: running with permissions nobody chose would be worse.
+  let permissions: Permissions
+  try {
+    permissions = new Permissions({ settings: () => settings, readOnly: config.readOnly })
+  } catch (error) {
+    if (error instanceof PermissionsError) {
+      process.stderr.write(`${NAME}: ${error.message}\n`)
+      process.exit(1)
+    }
+    throw error
+  }
+  const departures = permissions.departures()
+  if (departures.length > 0) {
+    notify(
+      `assistant permissions that differ from the default: ` +
+        departures.map((d) => `${d.tool} ${d.level} (${d.source})`).join(', '),
+    )
+  }
+  /**
+   * Shows or hides the tools after a change of levels. Set once the MCP server
+   * exists; the settings watcher calls it whenever the file changes.
+   */
+  let applyLevels: () => void = () => undefined
+  /** The tools this server registered, so the permissions page lists only real ones. */
+  const registeredNames = new Set<string>()
+  const groupOf = (tool: string): string =>
+    (Object.keys(GROUPS) as Group[]).find((group) => (GROUPS[group] as readonly string[]).includes(tool)) ?? ''
 
   const environmentCredentials = credentialsFromEnvironment()
   const session = new Session({
@@ -211,6 +250,67 @@ async function main(): Promise<void> {
         ...(entry.storeKind ? { storeTitle: STORE_DESCRIPTIONS[entry.storeKind].title } : {}),
       })),
     onServingChange: (serving) => instance.update({ servesInterface: serving }),
+    getPermissions: () => {
+      const fixed = permissions.limitsFixed()
+      const limits = permissions.limits()
+      return {
+        tools: CONTROLLED.filter((tool) => registeredNames.has(tool)).map((tool) => {
+          const source = permissions.source(tool)
+          return {
+            tool,
+            group: groupOf(tool),
+            level: permissions.level(tool),
+            options: levelsFor(tool),
+            fixed: source === 'environment' || source === 'read-only',
+            source: permissions.where(tool),
+            departs: permissions.level(tool) !== defaultLevel(tool),
+          }
+        }),
+        limits: {
+          allowed: limits.allowed ?? [],
+          ...(limits.maxPerHour !== undefined ? { maxPerHour: limits.maxPerHour } : {}),
+          ...(limits.until ? { until: limits.until } : {}),
+          fixed,
+        },
+      }
+    },
+    onLevels: async (chosen) => {
+      try {
+        settings = await updateSettings((current) => {
+          const levels = { ...(current.levels ?? {}) }
+          for (const [tool, level] of Object.entries(chosen)) {
+            // Only departures are stored, so a default that changes in a later
+            // version reaches everyone who never chose otherwise.
+            if (level === defaultLevel(tool)) delete levels[tool]
+            else levels[tool] = level
+          }
+          const { levels: _old, ...rest } = current
+          return Object.keys(levels).length > 0 ? { ...rest, levels } : rest
+        })
+      } catch (error) {
+        return `The levels could not be saved: ${(error as Error).message}`
+      }
+      applyLevels()
+      const now = permissions.departures()
+      notify(
+        now.length > 0
+          ? `assistant permissions changed: ${now.map((d) => `${d.tool} ${d.level}`).join(', ')}`
+          : 'assistant permissions are back to the default',
+      )
+      return undefined
+    },
+    onLimits: async (limits) => {
+      try {
+        settings = await updateSettings((current) => {
+          const { limits: _old, ...rest } = current
+          return Object.keys(limits).length > 0 ? { ...rest, limits } : rest
+        })
+      } catch (error) {
+        return `The bounds could not be saved: ${(error as Error).message}`
+      }
+      notify('the bounds on sending without asking changed')
+      return undefined
+    },
     onSignIn: async (credentials, storeKind, masterPassword) => {
       const failure = await verify(credentials)
       if (failure) return failure
@@ -397,6 +497,7 @@ async function main(): Promise<void> {
     }
     if (reconnect) void connection.close()
     refreshInstance()
+    applyLevels()
   })
 
   // Messages waiting for confirmation are shown by this server itself, on a
@@ -478,6 +579,20 @@ async function main(): Promise<void> {
         instructions: INSTRUCTIONS,
       },
     )
+    // Every tool is recorded as it is registered, so its level can show or hide
+    // it later. The SDK tells the client whenever that changes the list, and
+    // refuses a call to a tool that is switched off.
+    const tools = new Map<string, RegisteredTool>()
+    const register = server.registerTool.bind(server) as (...args: unknown[]) => RegisteredTool
+    ;(server as unknown as { registerTool: (...args: unknown[]) => RegisteredTool }).registerTool = (
+      ...args: unknown[]
+    ) => {
+      const tool = register(...args)
+      tools.set(String(args[0]), tool)
+      registeredNames.add(String(args[0]))
+      return tool
+    }
+
     registerGuidance(server)
     registerUpdateTool(server, VERSION)
     // Handed nothing but the server: it answers filter requests without
@@ -504,6 +619,7 @@ async function main(): Promise<void> {
       readOnly: () => config.readOnly,
       from: () => session.address,
       codec: sendCodec,
+      permissions,
     })
     registerInterfaceTool(server, {
       url: () => web.url,
@@ -515,6 +631,16 @@ async function main(): Promise<void> {
       storeKind: () => session.storeKind,
       locked: () => session.locked(),
     })
+
+    applyLevels = () => {
+      for (const [name, tool] of tools) {
+        const off = permissions.level(name) === 'off'
+        const enabled = (tool as { enabled?: boolean }).enabled !== false
+        if (off && enabled) tool.disable()
+        else if (!off && !enabled) tool.enable()
+      }
+    }
+    applyLevels()
     return server
   })
 

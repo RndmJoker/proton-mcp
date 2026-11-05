@@ -42,8 +42,11 @@ import {
   activitySection,
   mailboxSection,
   type ServerSummary,
+  type ToolLevelView,
+  type LimitsView,
 } from './sections.js'
 import type { Section, DisclaimerState } from './layout.js'
+import type { Level, SendLimits } from '../settings.js'
 
 /**
  * Upper bound for a request body.
@@ -81,6 +84,8 @@ const FORM_SECTIONS: Record<string, Section> = {
   '/test-connection': 'bridge',
   '/sign-out': 'credentials',
   '/pin': 'permissions',
+  '/permissions/levels': 'permissions',
+  '/permissions/limits': 'permissions',
 }
 
 /**
@@ -131,6 +136,15 @@ export interface WebInterfaceOptions {
   onServingChange?: (serving: boolean) => void
   /** How often to try taking over the port. TAKEOVER_INTERVAL_MS unless a test says otherwise. */
   takeoverIntervalMs?: number
+  /** What each tool may do and the bounds on sending without asking, for the permissions page. */
+  getPermissions?: () => { tools: ToolLevelView[]; limits: LimitsView }
+  /**
+   * Stores the levels chosen on the page, only those not fixed by the
+   * environment. Returns an error to show, or nothing.
+   */
+  onLevels?: (levels: Record<string, Level>) => Promise<string | undefined>
+  /** Stores the bounds on sending without asking. Returns an error to show, or nothing. */
+  onLimits?: (limits: SendLimits) => Promise<string | undefined>
   /**
    * Called when the user signs in. Returns an error message to show, or nothing
    * on success. The master password is only set for the encrypted-file store.
@@ -545,6 +559,14 @@ export class WebInterface {
       await this.#handlePin(response, body.fields)
       return
     }
+    if (writing && path === '/permissions/levels') {
+      await this.#handleLevels(response, body.fields)
+      return
+    }
+    if (writing && path === '/permissions/limits') {
+      await this.#handleLimits(response, body.fields)
+      return
+    }
     if (writing && path === '/dismiss-notice') {
       await this.#handleDismissNotice(response, body.fields)
       return
@@ -684,12 +706,17 @@ export class WebInterface {
         })
         break
 
-      case 'permissions':
+      case 'permissions': {
+        const permissions = this.#options.getPermissions?.()
         page = permissionsSection({
           csrfPin: csrfToken(this.#secrets, '/pin'),
+          csrfLevels: csrfToken(this.#secrets, '/permissions/levels'),
+          csrfLimits: csrfToken(this.#secrets, '/permissions/limits'),
+          ...(permissions ? { tools: permissions.tools, limits: permissions.limits } : {}),
           ...banners,
         })
         break
+      }
 
       case 'activity': {
         const activity = this.#options.getActivity?.() ?? { running: [], recent: [] }
@@ -701,6 +728,17 @@ export class WebInterface {
         page = overviewSection({
           connected: true,
           ...(this.#options.getServers ? { servers: this.#options.getServers() } : {}),
+          ...(this.#options.getPermissions
+            ? {
+                departures: this.#options
+                  .getPermissions()
+                  .tools.filter((tool) => tool.departs)
+                  .map((tool) => ({
+                    tool: tool.tool,
+                    level: { off: 'off', ask: 'ask first', act: 'act on its own' }[tool.level],
+                  })),
+              }
+            : {}),
           ...(status.address ? { address: status.address } : {}),
           ...storeTitle,
           ...(status.mailboxCount !== undefined ? { mailboxCount: status.mailboxCount } : {}),
@@ -740,6 +778,82 @@ export class WebInterface {
     this.#limiter.fail()
     this.#notify('web interface refused a change with a wrong or missing PIN')
     return presented ? 'The PIN is not right.' : 'This change needs the PIN.'
+  }
+
+  /**
+   * Takes the levels from the form.
+   *
+   * Only tools the page offered, only levels each one offers, and nothing the
+   * environment fixed: the form is untrusted input like any other, and a value
+   * it should not carry is refused rather than quietly dropped.
+   */
+  async #handleLevels(response: ServerResponse, fields: Record<string, string>): Promise<void> {
+    const view = this.#options.getPermissions?.()
+    if (!view || !this.#options.onLevels) {
+      await this.#render('permissions', response, { error: 'This server cannot store levels.' })
+      return
+    }
+    const levels: Record<string, Level> = {}
+    for (const tool of view.tools) {
+      if (tool.fixed) continue
+      const value = fields[`level:${tool.tool}`]
+      if (value === undefined) continue
+      if (!tool.options.includes(value as Level)) {
+        await this.#render('permissions', response, {
+          error: `"${value}" is not a level ${tool.tool} offers.`,
+        })
+        return
+      }
+      levels[tool.tool] = value as Level
+    }
+    const failure = await this.#options.onLevels(levels)
+    await this.#render('permissions', response, failure ? { error: failure } : { notice: 'The levels are saved.' })
+  }
+
+  /** Takes the bounds on sending without asking from the form, each one checked. */
+  async #handleLimits(response: ServerResponse, fields: Record<string, string>): Promise<void> {
+    if (!this.#options.onLimits) {
+      await this.#render('permissions', response, { error: 'This server cannot store bounds.' })
+      return
+    }
+    const limits: SendLimits = {}
+
+    const allowed = (fields.allowed ?? '')
+      .split(/[\s,]+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+    const malformed = allowed.find((entry) => !/^[^\s@]*@[^\s@]+\.[^\s@]+$/.test(entry))
+    if (malformed) {
+      await this.#render('permissions', response, {
+        error: `"${malformed}" is neither an address nor a domain written as @example.com.`,
+      })
+      return
+    }
+    if (allowed.length > 0) limits.allowed = allowed
+
+    const max = (fields.maxPerHour ?? '').trim()
+    if (max) {
+      const value = Number(max)
+      if (!Number.isInteger(value) || value < 1 || value > 10_000) {
+        await this.#render('permissions', response, {
+          error: `"${max}" is not a usable number of messages per hour.`,
+        })
+        return
+      }
+      limits.maxPerHour = value
+    }
+
+    const until = (fields.until ?? '').trim()
+    if (until) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(until) || Number.isNaN(Date.parse(`${until}T00:00:00Z`))) {
+        await this.#render('permissions', response, { error: `"${until}" is not a day.` })
+        return
+      }
+      limits.until = until
+    }
+
+    const failure = await this.#options.onLimits(limits)
+    await this.#render('permissions', response, failure ? { error: failure } : { notice: 'The bounds are saved.' })
   }
 
   /**

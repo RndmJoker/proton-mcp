@@ -88,6 +88,8 @@ export interface OverviewData extends Common {
   bridgeSmtpPort: number
   /** Every server running on this machine, this one included. */
   servers?: ServerSummary[]
+  /** Tools whose level differs from the default, with that level in words. */
+  departures?: Array<{ tool: string; level: string }>
 }
 
 /**
@@ -150,6 +152,12 @@ export function overviewSection(data: OverviewData): string {
         ? '<span class="state good">need the PIN</span>'
         : '<span class="state bad">anything on this machine can make them, the assistant included</span>',
       true,
+    ),
+    row(
+      'Assistant permissions',
+      !data.departures || data.departures.length === 0
+        ? 'as by default: sending asks first, everything else acts'
+        : data.departures.map((d) => `${d.tool}: ${d.level}`).join(', '),
     ),
     row('Server running for', formatDuration(data.uptimeMs)),
   ]
@@ -388,8 +396,126 @@ ${sections || '<div class="card"><p class="hint">No mailboxes were returned.</p>
   )
 }
 
+/** One tool as the permissions page shows it. */
+export interface ToolLevelView {
+  tool: string
+  group: string
+  level: 'off' | 'ask' | 'act'
+  /** The levels this tool offers. Only the sending tools and proposing a filter can ask. */
+  options: Array<'off' | 'ask' | 'act'>
+  /** Set in the environment or by read-only mode, and so not changeable here. */
+  fixed: boolean
+  /** Where the level comes from, in words. */
+  source: string
+  /** True when the level differs from the default. */
+  departs?: boolean
+}
+
+/** The bounds on sending without asking, each with whether the environment fixed it. */
+export interface LimitsView {
+  allowed: string[]
+  maxPerHour?: number
+  until?: string
+  fixed: { allowed: boolean; maxPerHour: boolean; until: boolean }
+}
+
 export interface PermissionsData extends Common {
   csrfPin: string
+  csrfLevels?: string
+  csrfLimits?: string
+  tools?: ToolLevelView[]
+  limits?: LimitsView
+}
+
+const LEVEL_NAMES: Record<'off' | 'ask' | 'act', string> = {
+  off: 'off',
+  ask: 'ask first',
+  act: 'act on its own',
+}
+
+/** The table of tools with a choice for each, or the fixed value where the environment decided. */
+function levelTable(data: PermissionsData): string {
+  if (!data.tools || data.tools.length === 0) return ''
+  const rows = data.tools
+    .map((tool) => {
+      const choice = tool.fixed
+        ? `<strong>${escapeHtml(LEVEL_NAMES[tool.level])}</strong> <span class="hint">(${escapeHtml(tool.source)})</span>`
+        : `<select name="level:${escapeHtml(tool.tool)}" aria-label="${escapeHtml(tool.tool)}">` +
+          tool.options
+            .map(
+              (option) =>
+                `<option value="${option}"${option === tool.level ? ' selected' : ''}>${escapeHtml(LEVEL_NAMES[option])}</option>`,
+            )
+            .join('') +
+          '</select>'
+      return `<tr><td><code>${escapeHtml(tool.tool)}</code></td><td>${escapeHtml(tool.group)}</td><td>${choice}</td></tr>`
+    })
+    .join('\n')
+
+  const autonomous = data.tools.filter(
+    (tool) => tool.level === 'act' && tool.options.includes('ask'),
+  )
+  const cost = autonomous.length
+    ? `<div class="error"><strong>${autonomous.map((t) => escapeHtml(t.tool)).join(', ')}
+${autonomous.length === 1 ? 'acts' : 'act'} without asking.</strong> Your private mail, text written by
+strangers and a way out are then together with no person in between: a single message can ask for
+your mailbox to be forwarded, and nobody would see it happen. Bound it below where you can.
+${data.pinRequired ? '' : '<br><strong>No PIN is set</strong>, so the assistant could also have switched this on itself.'}</div>`
+    : ''
+
+  return `<h2>What the assistant may do</h2>
+<div class="card">
+${cost}
+<form method="post" action="/permissions/levels">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfLevels ?? '')}">
+  <table>
+  <tr><th>Tool</th><th>Group</th><th>Level</th></tr>
+  ${rows}
+  </table>
+  <p class="hint"><strong>off</strong> takes a tool away from the assistant entirely.
+  <strong>ask first</strong> makes it ask you through your client before acting, which every sending
+  tool does by default. <strong>act on its own</strong> lets it go ahead. A level set in the server's
+  environment wins over this page and is shown here as fixed.</p>
+  ${pinField(data.pinRequired === true)}
+  <button type="submit">Save the levels</button>
+</form>
+</div>`
+}
+
+/** The optional bounds on sending without asking. */
+function limitsForm(data: PermissionsData): string {
+  const limits = data.limits
+  if (!limits) return ''
+  const fixedNote = (fixed: boolean) => (fixed ? ' <span class="hint">(set in the environment)</span>' : '')
+  const allowed = limits.fixed.allowed
+    ? `<p><code>${escapeHtml(limits.allowed.join(', ') || 'anyone')}</code>${fixedNote(true)}</p>`
+    : `<textarea id="allowed" name="allowed" rows="4">${escapeHtml(limits.allowed.join('\n'))}</textarea>`
+  const max = limits.fixed.maxPerHour
+    ? `<p><code>${escapeHtml(String(limits.maxPerHour ?? 'no limit'))}</code>${fixedNote(true)}</p>`
+    : `<input id="maxPerHour" name="maxPerHour" type="text" inputmode="numeric" value="${escapeHtml(limits.maxPerHour === undefined ? '' : String(limits.maxPerHour))}">`
+  const until = limits.fixed.until
+    ? `<p><code>${escapeHtml(limits.until ?? 'none')}</code>${fixedNote(true)}</p>`
+    : `<input id="until" name="until" type="date" value="${escapeHtml(limits.until ?? '')}">`
+
+  return `<h2>Bounds on sending without asking</h2>
+<div class="card">
+<form method="post" action="/permissions/limits">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfLimits ?? '')}">
+  <label for="allowed">Permitted recipients</label>
+  ${allowed}
+  <p class="hint">One per line: a full address, or a domain written as <code>@example.com</code>. Empty
+  means anyone. A message to anyone else asks first instead.</p>
+  <label for="maxPerHour">At most this many per hour</label>
+  ${max}
+  <p class="hint">Counted per running server. Beyond it, sending asks first again. Empty means no limit.</p>
+  <label for="until">Until this day</label>
+  ${until}
+  <p class="hint">After this day, sending asks first again until you set a new one. Empty means no end.</p>
+  <p class="hint">Every bound is optional. A send outside one asks you instead of failing.</p>
+  ${pinField(data.pinRequired === true)}
+  <button type="submit">Save the bounds</button>
+</form>
+</div>`
 }
 
 /**
@@ -446,6 +572,8 @@ to.</div>
 made here apply to every running server at once.</p>
 
 <h2>PIN</h2>
-<div class="card">${pin}</div>`,
+<div class="card">${pin}</div>
+${levelTable(data)}
+${limitsForm(data)}`,
   )
 }
