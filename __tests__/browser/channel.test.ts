@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path'
 import { runHost, type RunningHost } from '../../src/browser/host.js'
 import { askBrowser, diagnose, BrowserUnavailable } from '../../src/browser/client.js'
 import { browserPaths, type BrowserPaths } from '../../src/browser/paths.js'
-import { encodeNative, NativeReader, LineReader, parseLine, newNonce, proof } from '../../src/browser/channel.js'
+import { encodeNative, NativeReader, LineReader, parseLine, newNonce, proof, MAX_REQUEST_LINE } from '../../src/browser/channel.js'
 import { EXTENSION_ID, PROTOCOL_VERSION } from '../../src/browser/messages.js'
 
 /**
@@ -148,6 +148,16 @@ describe('anything else on the socket', () => {
     await client.settle()
     expect(client.closed()).toBe(true)
     expect(chrome.received.filter((message) => message.type === 'request')).toEqual([])
+  })
+
+  it('is cut off when it sends a line no request can be, before it proved anything', async () => {
+    // A request holds at most one script and fifty moves. Found in the review
+    // of 06.11.2026: the connector kept up to 64 MiB of a stranger's line.
+    await startHost()
+    const client = await raw(paths.socket)
+    await client.settle()
+    client.socket.write('x'.repeat(MAX_REQUEST_LINE + 1))
+    await vi.waitFor(() => expect(client.closed()).toBe(true), { timeout: 1_000, interval: 10 })
   })
 
   it('is cut off when it waits instead of proving anything', async () => {

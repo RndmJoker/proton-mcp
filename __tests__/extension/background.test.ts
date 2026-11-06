@@ -368,6 +368,42 @@ describe('trying again', () => {
   })
 })
 
+describe('moving', () => {
+  it('does not move filters when the order changed since the move was agreed to', async () => {
+    proton.model.filters.push(
+      { ID: 'a==', Name: 'A', Status: 1, Priority: 1, Version: 2, Sieve: GOOD },
+      { ID: 'b==', Name: 'B', Status: 1, Priority: 2, Version: 2, Sieve: OTHER },
+      { ID: 'c==', Name: 'C', Status: 1, Priority: 3, Version: 2, Sieve: GOOD },
+    )
+    expect(await ask({ kind: 'reorder_filters', account: ACCOUNT, moves: [{ id: 'c==', position: 1 }], confirm: true })).toMatchObject({
+      outcome: 'shown',
+    })
+    // Meanwhile someone puts B first in Proton's settings.
+    proton.model.filters[0]!.Priority = 2
+    proton.model.filters[1]!.Priority = 1
+    const { id, tab } = windows[0]!
+    expect(await fromPage('confirm', { type: 'decide', id, accept: true }, tab)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('order changed since'),
+    })
+    expect(proton.model.filters.map((filter) => filter.Priority)).toEqual([2, 1, 3])
+  })
+
+  it('moves them after the yes, in the order shown', async () => {
+    proton.model.filters.push(
+      { ID: 'a==', Name: 'A', Status: 1, Priority: 1, Version: 2, Sieve: GOOD },
+      { ID: 'b==', Name: 'B', Status: 1, Priority: 2, Version: 2, Sieve: OTHER },
+    )
+    await ask({ kind: 'reorder_filters', account: ACCOUNT, moves: [{ id: 'b==', position: 1 }], confirm: true })
+    const { id, tab } = windows[0]!
+    expect(await fromPage('confirm', { type: 'decide', id, accept: true }, tab)).toMatchObject({ ok: true })
+    expect(proton.model.filters.map((filter) => [filter.ID, filter.Priority])).toEqual([
+      ['a==', 2],
+      ['b==', 1],
+    ])
+  })
+})
+
 describe('the queue', () => {
   beforeEach(async () => {
     await switches({ save: true, apply: true, reorder: true })
@@ -429,11 +465,14 @@ describe('the queue', () => {
   })
 
   it('wakes only for what can run', async () => {
+    // Found in the review: the second application was due at once but could
+    // not run before the first, and woke the background every 30 seconds.
     proton.model.busy = true
     await apply('f1==')
     await apply('f2==')
-    const latest = alarms.at(-1)!
-    expect(latest.when).toBeGreaterThanOrEqual(Date.now() + 30_000)
+    await vi.waitFor(() => expect(alarms).toHaveLength(2))
+    // The first waits a minute after its first try, and the second behind it.
+    expect(alarms[1]!.when).toBeGreaterThanOrEqual(Date.now() + 55_000)
   })
 })
 

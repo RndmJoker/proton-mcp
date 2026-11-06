@@ -296,7 +296,15 @@ describe('what the review of 06.11.2026 found', () => {
   })
 
   it('takes the spam guard only as Proton writes it, without escapes', () => {
-    expect(problems(script('if true { fileinto "A"; }').replace('"*"', '"\\\\*"'))).toContain('without escapes')
+    // An escape that leaves the value as it is: only how it is written
+    // differs, and a parser that reads "\${1}" as text never matches the
+    // threshold, so the guard would never keep the filter off spam. The first
+    // version of this test escaped the backslash itself, which changed the
+    // value, and passed without the check it was written for.
+    const rule = script('if true { fileinto "A"; }')
+    expect(problems(rule.replace('"*"', '"\\*"'))).toContain('without escapes')
+    expect(problems(rule.replace('"${1}"', '"\\${1}"'))).toContain('without escapes')
+    expect(problems(rule.replace('"ge"', '"g\\e"'))).toContain('without escapes')
   })
 
   it('refuses a cut off list of conditions instead of failing inside', () => {
