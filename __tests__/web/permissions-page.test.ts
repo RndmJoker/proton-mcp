@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { request as httpRequest } from 'node:http'
 import { WebInterface } from '../../src/web/server.js'
-import type { ToolLevelView, LimitsView, RecordView } from '../../src/web/sections.js'
+import type { ToolLevelView, LimitsView, RecordView, FilterActionsView } from '../../src/web/sections.js'
+import type { Unlockable } from '../../src/filters/sieve.js'
 import type { Level, SendLimits, RecordCopy } from '../../src/settings.js'
 import { recordProblem } from '../../src/mail/record.js'
 import { hashPin, type StoredPin } from '../../src/web/security.js'
@@ -22,6 +23,8 @@ let savedLevels: Array<Record<string, Level>>
 let savedLimits: SendLimits[]
 let record: RecordView
 let savedRecords: Array<RecordCopy | undefined>
+let filterActions: FilterActionsView
+let savedActions: Unlockable[][]
 let pin: StoredPin | undefined
 
 beforeEach(async () => {
@@ -35,6 +38,8 @@ beforeEach(async () => {
   savedLimits = []
   record = { fixed: false }
   savedRecords = []
+  filterActions = { allowed: [], fixed: false }
+  savedActions = []
   pin = undefined
   web = new WebInterface({
     port: 0,
@@ -53,6 +58,11 @@ beforeEach(async () => {
       const problem = next ? recordProblem(next.address) : undefined
       if (problem) return problem
       savedRecords.push(next)
+      return undefined
+    },
+    getFilterActions: () => filterActions,
+    onFilterActions: async (actions) => {
+      savedActions.push(actions)
       return undefined
     },
     getPin: () => pin,
@@ -276,5 +286,73 @@ describe('the cost of the filter tools acting on their own (#59)', () => {
   it('names the window of the extension as where the filter tools ask', async () => {
     const { body } = await send('/permissions')
     expect(body.replace(/\s+/g, ' ')).toContain('the filter tools in a window of the browser extension')
+  })
+})
+
+describe('what a filter may do beyond filing and flags (06.11.2026)', () => {
+  it('offers one box per action, none ticked by default, each with what it costs', async () => {
+    const { body } = await send('/permissions')
+    for (const action of ['trash', 'discard', 'expire', 'reject', 'vacation', 'stop']) {
+      expect(body).toContain(`name="action:${action}"`)
+    }
+    expect(body).not.toMatch(/name="action:[a-z]+" value="on" checked/)
+    expect(body).toContain('deleted at once and for good')
+    expect(body.replace(/\s+/g, ' ')).toContain('The browser extension has the same switches in its popup, and an action needs both')
+  })
+
+  it('stores the ticked actions and nothing else', async () => {
+    const token = await csrf('/permissions/filter-actions')
+    const answer = await send('/permissions/filter-actions', { csrf: token, 'action:discard': 'on', 'action:trash': 'on' })
+    expect(answer.body).toContain('What filters may do is saved.')
+    expect(savedActions).toEqual([['trash', 'discard']])
+    await send('/permissions/filter-actions', { csrf: token })
+    expect(savedActions[1]).toEqual([])
+  })
+
+  it('refuses an action the page does not offer, or a box with another value', async () => {
+    const token = await csrf('/permissions/filter-actions')
+    expect((await send('/permissions/filter-actions', { csrf: token, 'action:redirect': 'on' })).body).toContain(
+      'is not an action a filter can be allowed',
+    )
+    expect((await send('/permissions/filter-actions', { csrf: token, 'action:trash': 'yes' })).body).toContain(
+      'came back with a value it does not have',
+    )
+    expect(savedActions).toEqual([])
+  })
+
+  it('shows a setting from the environment as text and refuses a change, even without the page', async () => {
+    filterActions = { allowed: ['stop'], fixed: true }
+    const page = await send('/permissions')
+    expect(page.body).toContain('PROTON_MCP_FILTER_ACTIONS')
+    expect(page.body).not.toContain('action="/permissions/filter-actions"')
+    filterActions = { allowed: ['stop'], fixed: false }
+    const token = await csrf('/permissions/filter-actions')
+    filterActions = { allowed: ['stop'], fixed: true }
+    expect((await send('/permissions/filter-actions', { csrf: token, 'action:trash': 'on' })).body).toContain(
+      'set in the environment',
+    )
+    expect(savedActions).toEqual([])
+  })
+
+  it('states the cost once something is allowed', async () => {
+    filterActions = { allowed: ['discard', 'vacation'], fixed: false }
+    const { body } = await send('/permissions')
+    expect(body).toContain('An assistant may set up filters that delete mail, answer automatically.')
+    expect(body).toContain('No PIN is set')
+  })
+
+  it('needs the PIN once one is set', async () => {
+    pin = await hashPin('correct horse')
+    const token = await csrf('/permissions/filter-actions')
+    expect((await send('/permissions/filter-actions', { csrf: token, 'action:trash': 'on' })).body).toContain('needs the PIN')
+    expect(savedActions).toEqual([])
+    await send('/permissions/filter-actions', { csrf: token, 'action:trash': 'on', pin: 'correct horse' })
+    expect(savedActions).toEqual([['trash']])
+  })
+
+  it('is named in the overview while something is allowed', async () => {
+    expect((await send('/')).body).toContain('nothing beyond filing and flags')
+    filterActions = { allowed: ['trash'], fixed: false }
+    expect((await send('/')).body).toContain('move mail to trash or spam')
   })
 })

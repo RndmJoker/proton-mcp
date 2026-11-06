@@ -4,6 +4,7 @@ import {
   PermissionsError,
   levelsFromEnvironment,
   limitsFromEnvironment,
+  unlocksFromEnvironment,
   permitted,
   defaultLevel,
   levelsFor,
@@ -47,6 +48,18 @@ describe('the defaults', () => {
   it('let a filter proposal ask, like sending', () => {
     expect(defaultLevel('propose_filter')).toBe('ask')
     expect(levelsFor('propose_filter')).toEqual(['off', 'ask', 'act'])
+  })
+
+  it('leave deleting a filter and switching one on or off off until the user switches them on (06.11.2026)', () => {
+    const { permissions } = make()
+    for (const tool of ['delete_filter', 'set_filter_status']) {
+      expect(defaultLevel(tool)).toBe('off')
+      expect(levelsFor(tool)).toEqual(['off', 'ask', 'act'])
+      expect(permissions.level(tool)).toBe('off')
+    }
+    expect(permissions.departures()).toEqual([])
+    const chosen = make({ settings: { levels: { delete_filter: 'ask' } } })
+    expect(chosen.permissions.level('delete_filter')).toBe('ask')
   })
 
   it('offer no question to a tool that only reads or files', () => {
@@ -145,6 +158,37 @@ describe('the interface', () => {
     // A hand-edited file asking a reading tool to ask first gets the default.
     const { permissions } = make({ settings: { levels: { list_messages: 'ask' } } })
     expect(permissions.level('list_messages')).toBe('act')
+  })
+})
+
+describe('what a filter may do beyond filing and flags (06.11.2026)', () => {
+  it('is nothing by default', () => {
+    expect([...make().permissions.unlocks()]).toEqual([])
+  })
+
+  it('comes from the interface, in a fixed order', () => {
+    const { permissions } = make({ settings: { filterActions: ['discard', 'trash'] } })
+    expect([...permissions.unlocks()]).toEqual(['trash', 'discard'])
+    expect(permissions.unlocksFixed()).toBe(false)
+  })
+
+  it('is fixed by the environment, which wins, and none allows nothing', () => {
+    const fixed = make({ env: { PROTON_MCP_FILTER_ACTIONS: 'stop, vacation' }, settings: { filterActions: ['trash'] } })
+    expect([...fixed.permissions.unlocks()]).toEqual(['vacation', 'stop'])
+    expect(fixed.permissions.unlocksFixed()).toBe(true)
+    expect(fixed.permissions.unlocksWhere()).toContain('PROTON_MCP_FILTER_ACTIONS')
+    const none = make({ env: { PROTON_MCP_FILTER_ACTIONS: 'none' }, settings: { filterActions: ['trash'] } })
+    expect([...none.permissions.unlocks()]).toEqual([])
+    expect(unlocksFromEnvironment({})).toBeUndefined()
+  })
+
+  it('stops the start on a name it does not know, redirect included', () => {
+    expect(() => unlocksFromEnvironment({ PROTON_MCP_FILTER_ACTIONS: 'trash, redirect' })).toThrow(PermissionsError)
+    expect(() => make({ env: { PROTON_MCP_FILTER_ACTIONS: 'everything' } })).toThrow(/not an action a filter can be allowed/)
+  })
+
+  it('is nothing in read-only mode', () => {
+    expect([...make({ readOnly: true, settings: { filterActions: ['trash'] } }).permissions.unlocks()]).toEqual([])
   })
 })
 

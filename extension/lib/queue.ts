@@ -55,6 +55,20 @@ export type QueuedWork =
       before: string[]
       after: string[]
     }
+  | {
+      action: 'delete'
+      name: string
+      filterId: string
+      /** The script as it was when deleting was agreed to; a filter changed since is not deleted. */
+      sieve: string
+    }
+  | {
+      action: 'status'
+      name: string
+      filterId: string
+      enabled: boolean
+      sieve: string
+    }
 
 export interface QueueEntry {
   id: string

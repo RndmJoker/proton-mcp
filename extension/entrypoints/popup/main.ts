@@ -10,10 +10,11 @@
 
 import { browser } from 'wxt/browser'
 import { NO_SWITCHES, type Change, type Switches } from '../../lib/ops.js'
+import { UNLOCKABLE, UNLOCKABLE_TEXT, type Unlockable } from '../../../src/filters/sieve.js'
 
 interface Waiting {
   id: string
-  action: 'save' | 'apply' | 'reorder'
+  action: 'save' | 'apply' | 'reorder' | 'delete' | 'status'
   name: string
   since: number
   attempts: number
@@ -26,6 +27,7 @@ interface Status {
   queue: Waiting[]
   changes: Change[]
   switches?: Switches
+  unlocks?: Unlockable[]
 }
 
 interface Notice {
@@ -37,12 +39,16 @@ const ACTION_TEXT: Record<Waiting['action'], string> = {
   save: 'Save',
   apply: 'Apply to the mail already there',
   reorder: 'Change',
+  delete: 'Delete',
+  status: 'Switch on or off',
 }
 
 const SWITCH_TEXT: Record<keyof Switches, string> = {
   save: 'Save a filter, new or replacing one',
   apply: 'Apply a filter to the mail already there',
   reorder: 'Change the order of the filters',
+  delete: 'Delete a filter',
+  status: 'Switch a filter on or off',
 }
 
 const app = document.getElementById('app')!
@@ -66,6 +72,9 @@ const OUTCOME_TEXT: Record<Change['outcome'], string> = {
   replaced: 'replaced',
   applied: 'applied to the mail already there',
   reordered: 'saved as the new order',
+  deleted: 'deleted',
+  enabled: 'switched on',
+  disabled: 'switched off',
   queued: 'queued, Proton was busy',
   cancelled: 'cancelled',
   rejected: 'rejected',
@@ -105,6 +114,43 @@ function renderSwitches(switches: Switches): void {
     })
     line.append(input, label)
     box.append(line)
+  }
+  app.append(box)
+}
+
+/**
+ * What a filter may do beyond filing and flags: the second lock beside the
+ * Permissions page of proton-mcp. An action needs both, all off by default,
+ * so a program that reached only the server cannot allow it (Tobi, 06.11.2026).
+ */
+function renderUnlocks(unlocks: readonly Unlockable[]): void {
+  app.append(
+    el('h2', 'What filters may do'),
+    el(
+      'p',
+      "Beyond filing and flags, an assistant's filter may do one of these only where it is ticked both here and " +
+        'on the Permissions page of proton-mcp.',
+      'muted',
+    ),
+  )
+  const box = el('div', undefined, 'switches')
+  for (const action of UNLOCKABLE) {
+    const line = el('p', undefined, 'choice')
+    const input = el('input')
+    input.type = 'checkbox'
+    input.id = `unlock-${action}`
+    input.checked = unlocks.includes(action)
+    const label = el('label', ` ${UNLOCKABLE_TEXT[action].title}`)
+    label.htmlFor = input.id
+    label.title = UNLOCKABLE_TEXT[action].risk
+    input.addEventListener('change', async () => {
+      for (const other of box.querySelectorAll('input')) other.disabled = true
+      const next = UNLOCKABLE.filter((name) => (name === action ? input.checked : unlocks.includes(name)))
+      const answer = (await browser.runtime.sendMessage({ type: 'unlocks', actions: next })) as { ok?: boolean } | undefined
+      void render(answer?.ok ? undefined : { ok: false, message: 'The setting could not be saved.' })
+    })
+    line.append(input, label)
+    box.append(line, el('p', UNLOCKABLE_TEXT[action].risk, 'muted risk'))
   }
   app.append(box)
 }
@@ -185,6 +231,7 @@ async function render(notice?: Notice): Promise<void> {
   }
 
   renderSwitches(status.switches ?? NO_SWITCHES)
+  renderUnlocks(status.unlocks ?? [])
 
   app.append(el('h2', 'Last changes'))
   if (status.changes.length === 0) {

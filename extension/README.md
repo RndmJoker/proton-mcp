@@ -1,6 +1,6 @@
 # Proton MCP Helper
 
-The browser extension of [proton-mcp](../README.md). It works in the signed-in Proton page for the server, for now on mail filters: reading them, proposing new or changed ones, applying them to the mail already there, and moving them in their order. Every change waits for a yes in a window of its own, unless the user allowed a tool to act on its own twice: on the server's Permissions page, and with the extension's own switch for it in its popup, off by default.
+The browser extension of [proton-mcp](../README.md). It works in the signed-in Proton page for the server, for now on mail filters: reading them, proposing new or changed ones, applying them to the mail already there, and moving them in their order. It can also delete filters and switch them on or off. Every change waits for a yes in a window of its own, unless the user allowed a tool to act on its own twice: on the server's Permissions page, and with the extension's own switch for it in its popup, off by default. What a filter may do beyond filing and flags is allowed the same way, twice, one action at a time.
 
 It is not part of the npm package. Each release carries it as a zip.
 
@@ -24,7 +24,7 @@ The connector, the program Chrome starts for the extension, is set up from the s
 | `entrypoints/background.ts` | Talks to the connector, checks every request again, finds the Proton tab of the right account, opens the windows, runs every write and keeps the queue |
 | `entrypoints/proton.content.ts` | The script in the Proton page. Listens to the background only and hands each request to `lib/content-ops.ts` |
 | `entrypoints/confirm/` | The window where a change is agreed to. Its buttons are locked for 1.5 seconds whenever it opens or comes to the front, and the one that refuses comes first |
-| `entrypoints/popup/` | Whether the connector runs, what waits, the switches for acting without the window, the last changes |
+| `entrypoints/popup/` | Whether the connector runs, what waits, the switches for acting without the window, what filters may do beyond filing and flags, the last changes |
 | `lib/content-ops.ts` | What the page script does: before every write it checks the account and the script once more |
 | `lib/proton-api.ts` | The calls to Proton's interface |
 | `lib/queue.ts` | When an application waits and when it is tried again |
@@ -36,4 +36,4 @@ The tests are in the server's `__tests__/extension/` and run with its `npm test`
 
 ## Permissions
 
-`nativeMessaging` to start the connector, `storage` for the switches, what waits and what happened, `alarms` to try a waiting application again, and the two Proton addresses `mail.proton.me` and `account.proton.me`. No `externally_connectable`: no web page can send the extension anything.
+`nativeMessaging` to start the connector, `storage` for the switches, what filters may do, what waits and what happened, `alarms` to try a waiting application again, and the two Proton addresses `mail.proton.me` and `account.proton.me`. No `externally_connectable`: no web page can send the extension anything.

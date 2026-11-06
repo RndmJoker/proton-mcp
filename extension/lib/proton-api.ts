@@ -92,7 +92,7 @@ export class ProtonApi {
     return this.#version
   }
 
-  async call<T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: unknown): Promise<ApiResult<T>> {
+  async call<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<ApiResult<T>> {
     const uid = sessionUid(this.env)
     if (!uid) return { ok: false, error: 'signed-out', message: 'The Proton page is not signed in.' }
     const version = await this.#appVersion()
@@ -231,6 +231,18 @@ export class ProtonApi {
    */
   async order(ids: string[]): Promise<ApiResult<void>> {
     const result = await this.call('PUT', 'mail/v4/filters/order', { FilterIDs: ids })
+    return result.ok ? { ok: true, value: undefined } : result
+  }
+
+  /** Deletes a filter for good, as Proton's own settings do (WebClients, deleteFilter). */
+  async delete(filterId: string): Promise<ApiResult<void>> {
+    const result = await this.call('DELETE', `mail/v4/filters/${encodeURIComponent(filterId)}`)
+    return result.ok ? { ok: true, value: undefined } : result
+  }
+
+  /** Switches a filter on or off, as Proton's own settings do (WebClients, toggleEnable). */
+  async setStatus(filterId: string, enabled: boolean): Promise<ApiResult<void>> {
+    const result = await this.call('PUT', `mail/v4/filters/${encodeURIComponent(filterId)}/${enabled ? 'enable' : 'disable'}`)
     return result.ok ? { ok: true, value: undefined } : result
   }
 

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { ProtonApi, sessionUid, clientId, localId, type PageEnvironment } from '../../extension/lib/proton-api.js'
 import { diffLines } from '../../extension/lib/diff.js'
-import { parseContentOp, parsePageMessage, parseSwitches, NO_SWITCHES } from '../../extension/lib/ops.js'
+import { parseContentOp, parsePageMessage, parseSwitches, readSwitches, NO_SWITCHES } from '../../extension/lib/ops.js'
 import { runContentOp } from '../../extension/lib/content-ops.js'
 import { EXTENSION_ID } from '../../src/browser/messages.js'
 import { SPAM_GUARD_PROLOGUE } from '../../src/filters/sieve.js'
@@ -220,8 +220,12 @@ describe('applying a filter to the mail already there', () => {
   })
 
   it('passes between the parts only with a plain filter id, and the box only as true or false', () => {
-    const apply = { op: 'apply', account: 'me@example.com', filterId: 'f1==', sieve: 'x' }
+    const apply = { op: 'apply', account: 'me@example.com', filterId: 'f1==', sieve: 'x', allowed: [] }
     expect(parseContentOp(apply)).toEqual(apply)
+    // What was allowed travels along, as known names only.
+    expect(parseContentOp({ ...apply, allowed: ['discard'] })).toEqual({ ...apply, allowed: ['discard'] })
+    expect(parseContentOp({ ...apply, allowed: ['redirect'] })).toBeUndefined()
+    expect(parseContentOp({ op: 'apply', account: 'me@example.com', filterId: 'f1==', sieve: 'x' })).toBeUndefined()
     expect(parseContentOp({ ...apply, filterId: 'a/b' })).toBeUndefined()
     // Without the account a write cannot be checked against the page.
     expect(parseContentOp({ op: 'apply', filterId: 'f1==', sieve: 'x' })).toBeUndefined()
@@ -260,15 +264,22 @@ describe('moving and waiting (#59, 06.11.2026)', () => {
 
 describe("the extension's own switches (#59, review of 06.11.2026)", () => {
   it('start all off, so the window always shows until the user turns one on', () => {
-    expect(NO_SWITCHES).toEqual({ save: false, apply: false, reorder: false })
+    expect(NO_SWITCHES).toEqual({ save: false, apply: false, reorder: false, delete: false, status: false })
   })
 
-  it('pass only as three plain yes-or-no values', () => {
-    const switches = { save: true, apply: false, reorder: false }
+  it('read the three switches stored before deleting and switching came, the new ones off', () => {
+    expect(readSwitches({ save: true, apply: false, reorder: true })).toEqual({ ...NO_SWITCHES, save: true, reorder: true })
+    expect(readSwitches({ save: 'yes' })).toEqual(NO_SWITCHES)
+    expect(readSwitches({ save: true, forward: true })).toEqual(NO_SWITCHES)
+    expect(readSwitches(undefined)).toEqual(NO_SWITCHES)
+  })
+
+  it('pass only as five plain yes-or-no values', () => {
+    const switches = { save: true, apply: false, reorder: false, delete: false, status: true }
     expect(parseSwitches(switches)).toEqual(switches)
     expect(parseSwitches({ ...switches, apply: 'yes' })).toBeUndefined()
-    expect(parseSwitches({ save: true, apply: false })).toBeUndefined()
-    expect(parseSwitches({ ...switches, delete: true })).toBeUndefined()
+    expect(parseSwitches({ save: true, apply: false, reorder: false })).toBeUndefined()
+    expect(parseSwitches({ ...switches, forward: true })).toBeUndefined()
     expect(parseSwitches([true, false, false])).toBeUndefined()
     expect(parsePageMessage({ type: 'switches', switches })).toEqual({ type: 'switches', switches })
     expect(parsePageMessage({ type: 'switches', switches: { ...switches, save: 1 } })).toBeUndefined()
@@ -289,6 +300,7 @@ describe('the last step before Proton (#59, review of 06.11.2026)', () => {
           return { body: { Code: 1000, Filters: filters.map((f, i) => ({ ...f, Status: 1, Priority: i + 1, Version: 2 })) } }
         }
         if (call.url === `${API}/mail/v4/messages/apply-filters`) return { status: 202, body: {} }
+        if (call.init?.method === 'DELETE' || /\/(enable|disable)$/.test(call.url)) return { body: { Code: 1000 } }
         return { body: { Code: 1000, Filter: { ID: 'new==' } } }
       },
     })
@@ -297,7 +309,7 @@ describe('the last step before Proton (#59, review of 06.11.2026)', () => {
 
   it('writes nothing when the page is signed in to another account', async () => {
     const { api, calls } = proton([])
-    expect(await runContentOp(api, { op: 'add', account: 'someone@example.net', name: 'A', sieve: good })).toMatchObject({
+    expect(await runContentOp(api, { op: 'add', account: 'someone@example.net', name: 'A', sieve: good , allowed: [] })).toMatchObject({
       ok: false,
       error: 'wrong-account',
     })
@@ -306,8 +318,8 @@ describe('the last step before Proton (#59, review of 06.11.2026)', () => {
 
   it('saves a script that passes the rules, and nothing else', async () => {
     const { api, calls } = proton([])
-    expect(await runContentOp(api, { op: 'add', account: 'me@example.com', name: 'A', sieve: good })).toEqual({ ok: true, value: 'new==' })
-    expect(await runContentOp(api, { op: 'add', account: 'me@example.com', name: 'B', sieve: discards })).toMatchObject({
+    expect(await runContentOp(api, { op: 'add', account: 'me@example.com', name: 'A', sieve: good , allowed: [] })).toEqual({ ok: true, value: 'new==' })
+    expect(await runContentOp(api, { op: 'add', account: 'me@example.com', name: 'B', sieve: discards , allowed: [] })).toMatchObject({
       ok: false,
       error: 'refused',
     })
@@ -319,16 +331,16 @@ describe('the last step before Proton (#59, review of 06.11.2026)', () => {
       { ID: 'f1==', Name: 'Travel', Sieve: good },
       { ID: 'f2==', Name: 'Gone', Sieve: discards },
     ])
-    expect(await runContentOp(api, { op: 'apply', account: 'me@example.com', filterId: 'f1==', sieve: good.replace(/\n/g, '\r\n') })).toEqual({
+    expect(await runContentOp(api, { op: 'apply', account: 'me@example.com', filterId: 'f1==', sieve: good.replace(/\n/g, '\r\n') , allowed: [] })).toEqual({
       ok: true,
       value: undefined,
     })
-    expect(await runContentOp(api, { op: 'apply', account: 'me@example.com', filterId: 'f1==', sieve: discards })).toMatchObject({
+    expect(await runContentOp(api, { op: 'apply', account: 'me@example.com', filterId: 'f1==', sieve: discards , allowed: [] })).toMatchObject({
       error: 'refused',
       message: expect.stringContaining('changed since'),
     })
-    expect(await runContentOp(api, { op: 'apply', account: 'me@example.com', filterId: 'f2==', sieve: discards })).toMatchObject({ error: 'refused' })
-    expect(await runContentOp(api, { op: 'apply', account: 'me@example.com', filterId: 'f3==', sieve: good })).toMatchObject({ error: 'not-found' })
+    expect(await runContentOp(api, { op: 'apply', account: 'me@example.com', filterId: 'f2==', sieve: discards , allowed: [] })).toMatchObject({ error: 'refused' })
+    expect(await runContentOp(api, { op: 'apply', account: 'me@example.com', filterId: 'f3==', sieve: good , allowed: [] })).toMatchObject({ error: 'not-found' })
     expect(writes(calls).map((call) => call.url)).toEqual([`${API}/mail/v4/messages/apply-filters`])
   })
 
@@ -342,5 +354,58 @@ describe('the last step before Proton (#59, review of 06.11.2026)', () => {
     }
     expect(writes(calls)).toEqual([])
     expect(await runContentOp(api, { op: 'order', account: 'me@example.com', ids: ['b==', 'a=='] })).toEqual({ ok: true, value: undefined })
+  })
+
+  it('adds a filter that deletes only where the popup allowed it', async () => {
+    const { api } = proton([])
+    expect(await runContentOp(api, { op: 'add', account: 'me@example.com', name: 'B', sieve: discards, allowed: ['discard'] })).toEqual({
+      ok: true,
+      value: 'new==',
+    })
+  })
+
+  it('deletes and switches only the filter as it was agreed to, in the right account', async () => {
+    const { api, calls } = proton([
+      { ID: 'f1==', Name: 'Travel', Sieve: good },
+      { ID: 'f2==', Name: 'Gone', Sieve: discards },
+    ])
+    expect(await runContentOp(api, { op: 'delete', account: 'someone@example.net', filterId: 'f1==', sieve: good })).toMatchObject({
+      error: 'wrong-account',
+    })
+    expect(await runContentOp(api, { op: 'delete', account: 'me@example.com', filterId: 'f1==', sieve: discards })).toMatchObject({
+      error: 'refused',
+      message: expect.stringContaining('changed since'),
+    })
+    expect(writes(calls)).toEqual([])
+    expect(await runContentOp(api, { op: 'delete', account: 'me@example.com', filterId: 'f1==', sieve: good })).toEqual({ ok: true, value: undefined })
+    // Switching on sets up what the filter does; switching off never needs an allowance.
+    expect(
+      await runContentOp(api, { op: 'status', account: 'me@example.com', filterId: 'f2==', enabled: true, sieve: discards, allowed: [] }),
+    ).toMatchObject({ error: 'refused' })
+    expect(
+      await runContentOp(api, { op: 'status', account: 'me@example.com', filterId: 'f2==', enabled: false, sieve: discards, allowed: [] }),
+    ).toEqual({ ok: true, value: undefined })
+    expect(
+      await runContentOp(api, { op: 'status', account: 'me@example.com', filterId: 'f2==', enabled: true, sieve: discards, allowed: ['discard'] }),
+    ).toEqual({ ok: true, value: undefined })
+    expect(writes(calls).map((call) => `${call.init?.method} ${call.url.replace(API, '')}`)).toEqual([
+      'DELETE /mail/v4/filters/f1%3D%3D',
+      'PUT /mail/v4/filters/f2%3D%3D/disable',
+      'PUT /mail/v4/filters/f2%3D%3D/enable',
+    ])
+  })
+})
+
+describe('the messages for deleting and switching (06.11.2026)', () => {
+  it('pass between the parts only in their shapes', () => {
+    const remove = { op: 'delete', account: 'me@example.com', filterId: 'f1==', sieve: 'x' }
+    expect(parseContentOp(remove)).toEqual(remove)
+    expect(parseContentOp({ ...remove, filterId: 'a/b' })).toBeUndefined()
+    const status = { op: 'status', account: 'me@example.com', filterId: 'f1==', enabled: true, sieve: 'x', allowed: ['stop'] }
+    expect(parseContentOp(status)).toEqual(status)
+    expect(parseContentOp({ ...status, enabled: 'yes' })).toBeUndefined()
+    expect(parsePageMessage({ type: 'unlocks', actions: ['trash', 'stop'] })).toEqual({ type: 'unlocks', actions: ['trash', 'stop'] })
+    expect(parsePageMessage({ type: 'unlocks', actions: ['forward'] })).toBeUndefined()
+    expect(parsePageMessage({ type: 'unlocks', actions: ['trash', 'trash'] })).toBeUndefined()
   })
 })

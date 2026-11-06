@@ -207,7 +207,35 @@ describe('moving and the queue (#59, 06.11.2026)', () => {
         recent: [{ at: 1, name: 'T', outcome: 'queued', how: 'confirmed', detail: 'busy' }],
       }),
     ).toBeDefined()
-    expect(parseResponse({ ...base, queue: [{ action: 'delete', name: 'T', since: 1, attempts: 2 }] })).toBeUndefined()
-    expect(parseResponse({ ...base, recent: [{ at: 1, name: 'T', outcome: 'deleted', how: 'confirmed' }] })).toBeUndefined()
+    expect(parseResponse({ ...base, queue: [{ action: 'forward', name: 'T', since: 1, attempts: 2 }] })).toBeUndefined()
+    expect(parseResponse({ ...base, recent: [{ at: 1, name: 'T', outcome: 'forwarded', how: 'confirmed' }] })).toBeUndefined()
+  })
+})
+
+describe('deleting and switching filters (06.11.2026)', () => {
+  it('pass as requests with exactly their fields', () => {
+    const remove = { kind: 'delete_filter', account: 'me@example.com', filterId: 'f1==', confirm: true }
+    expect(parseRequest(remove)).toEqual(remove)
+    expect(parseRequest({ ...remove, filterId: '../x' })).toBeUndefined()
+    expect(parseRequest({ ...remove, also: 'this' })).toBeUndefined()
+    const status = { kind: 'set_filter_status', account: 'me@example.com', filterId: 'f1==', enabled: false, confirm: false }
+    expect(parseRequest(status)).toEqual(status)
+    expect(parseRequest({ ...status, enabled: 'no' })).toBeUndefined()
+    expect(parseRequest({ kind: 'set_filter_status', account: 'me@example.com', filterId: 'f1==', confirm: true })).toBeUndefined()
+  })
+
+  it('pass as answers with their own outcomes only', () => {
+    expect(parseResponse({ ok: true, kind: 'delete_filter', outcome: 'deleted' })).toBeDefined()
+    expect(parseResponse({ ok: true, kind: 'delete_filter', outcome: 'switched' })).toBeUndefined()
+    expect(parseResponse({ ok: true, kind: 'set_filter_status', outcome: 'switched' })).toBeDefined()
+    expect(parseResponse({ ok: true, kind: 'set_filter_status', outcome: 'deleted' })).toBeUndefined()
+    const base = { ok: true, kind: 'list_filters', filters: [] }
+    expect(
+      parseResponse({
+        ...base,
+        queue: [{ action: 'delete', name: 'T', since: 1, attempts: 1 }],
+        recent: [{ at: 1, name: 'T', outcome: 'disabled', how: 'confirmed' }],
+      }),
+    ).toBeDefined()
   })
 })

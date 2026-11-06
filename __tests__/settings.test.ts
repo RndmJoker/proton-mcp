@@ -180,6 +180,12 @@ describe('the settings shared by every running server', () => {
     expect(kept).toEqual({ levels: { trash_messages: 'ask' } })
   })
 
+  it('keeps what filters may do, in a fixed order, and drops names it does not know', () => {
+    expect(sanitise({ filterActions: ['discard', 'trash', 'redirect', 42] })).toEqual({ filterActions: ['trash', 'discard'] })
+    expect(sanitise({ filterActions: ['forward'] })).toEqual({})
+    expect(sanitise({ filterActions: 'trash' })).toEqual({})
+  })
+
   it('leaves no temporary file behind after writing', async () => {
     await saveSettings({ imapPort: 1143 }, path)
     expect(readdirSync(dir)).toEqual(['settings.json'])

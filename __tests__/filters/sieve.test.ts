@@ -3,9 +3,12 @@ import {
   reviewSieve,
   parseSieve,
   filterNameProblem,
+  parseUnlocks,
   SPAM_GUARD_PROLOGUE,
   MAX_SCRIPT_LENGTH,
+  UNLOCKABLE,
   SieveSyntaxError,
+  type Unlockable,
 } from '../../src/filters/sieve.js'
 
 /**
@@ -72,7 +75,8 @@ describe('what deletes, hides, answers or switches off', () => {
   it.each([
     ['discard', 'discard;', 'it deletes mail'],
     ['stop', 'fileinto "A";\n  stop;', 'switches those filters off'],
-    ['redirect', 'redirect "someone@example.org";', 'forwards mail'],
+    // Proton's filters do not run redirect at all, measured in its documentation on 06.11.2026.
+    ['redirect', 'redirect "someone@example.org";', 'Proton does not run it in filters'],
   ])('refuses %s and says why', (_name, body, reason) => {
     const review = reviewSieve(script(`if true {\n  ${body}\n}`))
     expect(review.problems.join('\n')).toContain(reason)
@@ -363,5 +367,112 @@ describe('what the review of 06.11.2026 found', () => {
   it('refuses invisible characters and line separators in a filter name', () => {
     expect(filterNameProblem(`a${cp(0x2028)}b`)).toContain('invisible')
     expect(filterNameProblem(`n${cp(0x34f)}ame`)).toContain('invisible')
+  })
+})
+
+describe('what the user can allow, one action at a time (Tobi, 06.11.2026)', () => {
+  const allow = (...actions: Unlockable[]) => new Set(actions)
+  const withExtensions = (extensions: string, rules: string) =>
+    `${SPAM_GUARD_PROLOGUE.replace('"spamtest"];', `"spamtest", ${extensions}];`)}\n${rules}\n`
+
+  it.each([
+    ['trash', script('if address :is "from" "a@example.com" { fileinto "Trash"; }'), 'moves it to Trash'],
+    ['discard', script('if address :is "from" "a@example.com" { discard; }'), 'deletes it at once and for good'],
+    ['stop', script('if address :is "from" "a@example.com" { fileinto "A"; stop; }'), 'keeps every later filter from running on it'],
+    ['expire', withExtensions('"vnd.proton.expire"', 'if address :is "from" "a@example.com" { expire "day" "30"; }'), 'deletes it after 30 days'],
+    ['reject', withExtensions('"reject"', 'if address :is "from" "a@example.com" { reject "No, thank you."; }'), 'turns it away and tells the sender "No, thank you."'],
+    ['vacation', withExtensions('"vacation"', 'if address :is "from" "a@example.com" { vacation "Back on Monday."; }'), 'answers the sender in your name with "Back on Monday."'],
+  ] as Array<[Unlockable, string, string]>)('refuses %s by default, says where to allow it, and takes it once allowed', (action, source, effect) => {
+    const refused = reviewSieve(source)
+    expect(refused.problems.join('\n')).toContain('Permissions page of proton-mcp and in the popup of the browser extension')
+    expect(refused.unlocked).toEqual([])
+    const allowed = reviewSieve(source, allow(action))
+    expect(allowed.problems).toEqual([])
+    expect(allowed.effects).toContain(effect)
+    expect(allowed.unlocked.length).toBe(1)
+    expect(allowed.refused).toEqual([])
+    // What it costs is named once more with it, for the window.
+    expect(allowed.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('allows one action without the others', () => {
+    const both = script('if true { fileinto "Trash"; discard; }')
+    const only = reviewSieve(both, allow('trash'))
+    expect(only.problems.join('\n')).toContain('discard is refused')
+    expect(only.refused).toEqual(['discard'])
+    expect(only.unlocked).toEqual(['filing into Trash'])
+  })
+
+  it('names Trash and Spam as what they may be, whatever the spelling', () => {
+    expect(reviewSieve(script('if true { fileinto "Archive/TRASH"; }'), allow('trash')).effects).toEqual([
+      'moves it to Trash, written "Archive/TRASH"',
+    ])
+    expect(reviewSieve(script('if true { fileinto "Spam"; }'), allow('trash')).effects).toEqual(['moves it to Spam'])
+  })
+
+  it('keeps refusing what could make the script read differently from what it does, whatever is allowed', () => {
+    const everything = new Set(UNLOCKABLE)
+    for (const source of [
+      script('if true { fileinto "3"; }'),
+      script('if true { fileinto "${folder}"; }'),
+      script('if header :regex "subject" "x" { discard; }'),
+      script('/* note */ if true { discard; }'),
+      script('if true { discard; } \rif true { stop; }'),
+      script('if true { redirect "someone@example.org"; }'),
+    ]) {
+      expect(reviewSieve(source, everything).problems.length).toBeGreaterThan(0)
+    }
+    expect(reviewSieve('if true { discard; }', everything).problems.join('\n')).toContain('spam guard')
+  })
+
+  it('reads expire as Proton documents it, and says where Proton cuts it', () => {
+    const expire = (args: string) => reviewSieve(withExtensions('"vnd.proton.expire"', `if true { expire ${args}; }`), allow('expire'))
+    expect(expire('"minute" "1"').effects).toEqual(['deletes it after 1 minute'])
+    expect(expire('"day" "900"').effects).toEqual(['deletes it after 900 days, which Proton cuts to 730 days'])
+    expect(expire('"week" "1"').problems.join('\n')).toContain('"day", "minute" or "second"')
+    expect(expire('"day" "ten"').problems.join('\n')).toContain('whole digits')
+    expect(expire('"day"').problems.join('\n')).toContain('a unit and a number')
+    expect(reviewSieve(withExtensions('"vnd.proton.expire"', 'if true { unexpire; }'), allow('expire')).effects).toEqual([
+      'takes away its expiry',
+    ])
+    // Reading the expiry is part of the same extension.
+    expect(reviewSieve(withExtensions('"vnd.proton.expire", "fileinto"', 'if hasexpiration { fileinto "A"; }'), allow('expire')).problems).toEqual([])
+    expect(reviewSieve(withExtensions('"vnd.proton.expire", "fileinto"', 'if hasexpiration { fileinto "A"; }')).problems.join('\n')).toContain('the test hasexpiration is refused')
+  })
+
+  it('takes only text written out in what goes to a sender, and an address in it only in plain ASCII', () => {
+    const cp = (code: number) => String.fromCodePoint(code)
+    const reject = (reason: string) => reviewSieve(withExtensions('"reject"', `if true { reject "${reason}"; }`), allow('reject'))
+    // Umlauts in the text are fine; only an address in it has to be plain ASCII.
+    expect(reject(`Bitte schreib an buero@example.com, ich bin bis Montag weg. Gr${cp(0xfc)}${cp(0xdf)}e`).problems).toEqual([])
+    expect(reject('${1}').problems.join('\n')).toContain('has to be written out')
+    expect(reject(`Write to boss@ex${cp(0x430)}mple.com`).problems.join('\n')).toContain('plain ASCII')
+  })
+
+  it('reads the tags of vacation, and refuses the ones Proton does not document', () => {
+    const vacation = (args: string) => reviewSieve(withExtensions('"vacation"', `if true { vacation ${args}; }`), allow('vacation'))
+    expect(vacation(':days 7 :subject "Away" "Back on Monday."').effects).toEqual([
+      'answers the sender in your name with "Back on Monday.", under the subject "Away", at most once in 7 days for each sender',
+    ])
+    expect(vacation(':handle "h" "Back soon."').problems).toEqual([])
+    expect(vacation(':mime "Content-Type: text/html"').problems.join('\n')).toContain(':mime is not a tag vacation may use')
+    expect(vacation(':from "x@example.com" "Hi"').problems.join('\n')).toContain(':from is not a tag vacation may use')
+    expect(vacation(':days "7" "Hi"').problems.join('\n')).toContain(':days takes a whole number')
+    expect(vacation('"a" "b"').problems.join('\n')).toContain('then one text')
+    expect(vacation(':subject "${1}" "Hi"').problems.join('\n')).toContain('has to be written out')
+    expect(vacation('"Back on Monday."').warnings.join('\n')).toContain('only on paid plans')
+  })
+
+  it('counts nothing after stop as something the filter does', () => {
+    const review = reviewSieve(script('if true { stop; }\nif true { fileinto "A"; }'), allow('stop'))
+    expect(review.effects).toEqual(['keeps every later filter from running on it'])
+  })
+
+  it('reads a list of allowed actions only as known names, each once', () => {
+    expect(parseUnlocks(['trash', 'discard'])).toEqual(['trash', 'discard'])
+    expect(parseUnlocks([])).toEqual([])
+    expect(parseUnlocks(['trash', 'trash'])).toBeUndefined()
+    expect(parseUnlocks(['redirect'])).toBeUndefined()
+    expect(parseUnlocks('trash')).toBeUndefined()
   })
 })

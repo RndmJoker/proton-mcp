@@ -343,6 +343,23 @@ async function main(): Promise<void> {
       notify(record ? `every message sent now also goes to ${record.address} (${record.mode})` : 'no copy is added to messages any more')
       return undefined
     },
+    getFilterActions: () => ({ allowed: [...permissions.unlocks()], fixed: permissions.unlocksFixed() }),
+    onFilterActions: async (actions) => {
+      try {
+        settings = await updateSettings((current) => {
+          const { filterActions: _old, ...rest } = current
+          return actions.length > 0 ? { ...rest, filterActions: actions } : rest
+        })
+      } catch (error) {
+        return `What filters may do could not be saved: ${(error as Error).message}`
+      }
+      notify(
+        actions.length > 0
+          ? `filters from an assistant may now also: ${actions.join(', ')}`
+          : 'filters from an assistant may only file and flag again',
+      )
+      return undefined
+    },
     onLimits: async (limits) => {
       try {
         settings = await updateSettings((current) => {

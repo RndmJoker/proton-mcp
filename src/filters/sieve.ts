@@ -94,6 +94,43 @@ export const SPAM_GUARD_PROLOGUE =
   '    return;\n' +
   '}\n'
 
+/**
+ * What a filter may do beyond filing and flags, each only where the user
+ * allows it: on the Permissions page of proton-mcp and, as a second lock, in
+ * the popup of the extension. All off by default. Tobi's principle of
+ * 06.11.2026: what an assistant may set up is the user's decision, and the
+ * settings are where they make it. The checks against a script that reads
+ * differently from what it does stay, whatever is allowed, and so does the
+ * spam guard.
+ */
+export const UNLOCKABLE = ['trash', 'discard', 'expire', 'reject', 'vacation', 'stop'] as const
+export type Unlockable = (typeof UNLOCKABLE)[number]
+
+/** How each is named for people, and what it costs, in the settings, in refusals and in the window. */
+export const UNLOCKABLE_TEXT: Readonly<Record<Unlockable, { title: string; risk: string }>> = {
+  trash: { title: 'Move mail to Trash or Spam', risk: 'Matching mail ends up where nobody looks for it.' },
+  discard: { title: 'Delete mail', risk: 'Matching mail is deleted at once and for good, before anyone sees it.' },
+  expire: { title: 'Delete mail after a time', risk: 'Matching mail is deleted after a set time, at most 730 days.' },
+  reject: { title: 'Turn mail away', risk: 'Matching mail is deleted, and its sender is told it was refused.' },
+  vacation: {
+    title: 'Answer automatically',
+    risk: 'Whoever sends matching mail gets a reply in your name, without anyone reading it first.',
+  },
+  stop: { title: 'Stop the later filters', risk: 'No filter after this one runs on matching mail.' },
+}
+
+/** Nothing allowed beyond filing and flags: how every check runs unless the user allowed more. */
+export const NO_UNLOCKS: ReadonlySet<Unlockable> = new Set()
+
+/** A list of allowed actions as read from settings or a message, or nothing when it is not one. */
+export function parseUnlocks(value: unknown): Unlockable[] | undefined {
+  if (!Array.isArray(value) || value.length > UNLOCKABLE.length) return undefined
+  if (!value.every((item): item is Unlockable => typeof item === 'string' && (UNLOCKABLE as readonly string[]).includes(item))) {
+    return undefined
+  }
+  return new Set(value).size === value.length ? [...value] : undefined
+}
+
 /** The extensions the spam guard itself needs in the require line. */
 const GUARD_EXTENSIONS = ['include', 'environment', 'variables', 'relational', 'comparator-i;ascii-numeric', 'spamtest']
 
@@ -122,19 +159,48 @@ const EXTENSIONS: Readonly<Record<string, true | string>> = {
     'arithmetic can fail while Proton runs the filter, and whether that ends the later filters like stop is not known',
 }
 
-/** Commands that are refused wherever they stand, with the reason. */
+/** The extensions that only an allowed action may require. */
+const EXTENSION_UNLOCKS: Readonly<Record<string, Unlockable>> = {
+  reject: 'reject',
+  vacation: 'vacation',
+  'vnd.proton.expire': 'expire',
+}
+
+/** Commands that are refused wherever they stand, with the reason, unless the action is allowed. */
 const REFUSED_COMMANDS: Readonly<Record<string, string>> = {
   discard: 'it deletes mail, and no later filter runs on the message',
   stop: 'it ends every later filter for a matching message, which switches those filters off without anyone seeing it',
   reject: 'it turns mail away so it never arrives',
-  ereject: 'it turns mail away so it never arrives',
+  ereject: 'Proton does not list it among what its filters run',
   vacation: 'it sends replies from your address without anyone reading them first',
   expire: 'it deletes mail after a set time',
-  unexpire: 'it belongs to expiry, which is left to the user',
-  redirect: 'it forwards mail to another address',
+  unexpire: 'it belongs to expiry',
+  // Measured on 06.11.2026 in Proton's documentation: redirect is not among
+  // what its filters run. Forwarding is a setting of its own in Proton.
+  redirect: "Proton does not run it in filters; forwarding is a setting of its own in Proton, which these tools do not touch",
   notify: 'it sends notifications to another address',
   include: 'Proton runs other scripts through it only as return',
 }
+
+/** The commands an allowed action unlocks. */
+const COMMAND_UNLOCKS: Readonly<Record<string, Unlockable>> = {
+  discard: 'discard',
+  stop: 'stop',
+  reject: 'reject',
+  vacation: 'vacation',
+  expire: 'expire',
+  unexpire: 'expire',
+}
+
+/** How a refusal of an action that can be allowed ends, so the assistant can tell the user where. */
+const ALLOW_HINT =
+  'The user can allow it on the Permissions page of proton-mcp and in the popup of the browser extension, or set it up in Proton\'s settings.'
+
+/** The tags vacation takes here, as Proton documents them. :mime and :from are left out. */
+const VACATION_TAGS = new Set(['days', 'subject', 'handle'])
+
+/** The units Proton documents for expire. */
+const EXPIRE_UNITS = new Set(['day', 'minute', 'second'])
 
 /** Commands a proposed script may use, apart from the control structure. */
 const ACTIONS = new Set(['fileinto', 'addflag', 'removeflag', 'setflag', 'keep', 'set', 'return'])
@@ -163,10 +229,10 @@ const TESTS = new Set([
 /** The only tests that take other tests. */
 const COMBINING_TESTS = new Set(['allof', 'anyof', 'not'])
 
-/** Tests that are refused with the reason, because their extension is. */
+/** Tests that are refused with the reason, because their extension is, unless expiry is allowed. */
 const REFUSED_TESTS: Readonly<Record<string, string>> = {
-  hasexpiration: 'it belongs to expiry, which is left to the user',
-  expiration: 'it belongs to expiry, which is left to the user',
+  hasexpiration: 'it belongs to expiry',
+  expiration: 'it belongs to expiry',
 }
 
 /** Tags a proposed script may use, in tests and in set. */
@@ -570,6 +636,12 @@ export interface SieveReview {
    * wrote is moved: the order decides what those actions end up doing.
    */
   refused: string[]
+  /**
+   * What the script does beyond filing and flags that the user allowed, in
+   * the same words. Shown where filters move, like refused: the order
+   * decides what those actions end up doing.
+   */
+  unlocked: string[]
 }
 
 /**
@@ -712,10 +784,162 @@ interface Walk {
   marksRead: boolean
   movesAway: boolean
   acts: boolean
+  /** What the user allowed beyond filing and flags. */
+  allowed: ReadonlySet<Unlockable>
+  unlocked: string[]
+  /** Which allowed actions the script uses where they can run, for the warnings. */
+  uses: Set<Unlockable>
 }
 
 function addRefused(walk: Walk, what: string): void {
   if (!walk.refused.includes(what)) walk.refused.push(what)
+}
+
+function addUnlocked(walk: Walk, action: Unlockable, what: string): void {
+  walk.uses.add(action)
+  if (!walk.unlocked.includes(what)) walk.unlocked.push(what)
+}
+
+/**
+ * Free text, such as the answer of vacation: no line break, as everywhere,
+ * and an address in it only in plain ASCII. Letters outside ASCII elsewhere
+ * in the text are fine, an answer in German has umlauts.
+ */
+function checkText(value: string, line: number, walk: Walk): boolean {
+  if (/[\r\n]/.test(value)) {
+    walk.problems.push(`Line ${line}: a string runs over more than one line, which can make the script read as something it is not.`)
+    return false
+  }
+  const disguised = value.split(/\s+/).find((word) => word.includes('@') && /[^\x20-\x7e]/.test(word))
+  if (disguised) {
+    walk.problems.push(
+      `Line ${line}: ${JSON.stringify(disguised)} looks like an address with letters outside plain ASCII. They can spell ` +
+        'a familiar address that is a different one; write it in plain ASCII.',
+    )
+    return false
+  }
+  if (value.includes('${')) {
+    walk.problems.push(`Line ${line}: the text has to be written out. A variable could put words in it that the check never saw.`)
+    return false
+  }
+  return true
+}
+
+/**
+ * An allowed action: its arguments as Proton documents them, and what it does
+ * in plain words for the window. Variables are refused in every text it
+ * sends or sets, so the window shows exactly what goes out.
+ */
+function checkUnlocked(command: SieveCommand, walk: Walk, live: boolean): void {
+  const line = command.line
+  const strings = command.args.filter((arg): arg is StringsArgument => arg.kind === 'strings')
+  switch (command.name) {
+    case 'discard':
+    case 'stop':
+    case 'unexpire': {
+      if (command.args.length > 0) {
+        walk.problems.push(`Line ${line}: ${command.name} takes no arguments.`)
+        return
+      }
+      if (!live) return
+      walk.acts = true
+      if (command.name === 'discard') {
+        addEffect(walk, 'deletes it at once and for good')
+        addUnlocked(walk, 'discard', 'discard')
+      } else if (command.name === 'stop') {
+        addEffect(walk, 'keeps every later filter from running on it')
+        addUnlocked(walk, 'stop', 'stop')
+      } else {
+        addEffect(walk, 'takes away its expiry')
+        addUnlocked(walk, 'expire', 'unexpire')
+      }
+      return
+    }
+    case 'expire': {
+      if (command.args.some((arg) => arg.kind !== 'strings') || strings.length !== 2 || strings.some((arg) => arg.list)) {
+        walk.problems.push(`Line ${line}: expire takes a unit and a number, each one string, such as expire "day" "30".`)
+        return
+      }
+      const unit = strings[0]!.values[0]!
+      const amount = strings[1]!.values[0]!
+      if (!EXPIRE_UNITS.has(unit)) {
+        walk.problems.push(`Line ${line}: expire takes "day", "minute" or "second" as its unit.`)
+        return
+      }
+      if (!/^\d{1,6}$/.test(amount)) {
+        walk.problems.push(`Line ${line}: expire takes the time as whole digits, written out.`)
+        return
+      }
+      if (!live) return
+      walk.acts = true
+      const count = Number(amount)
+      const capped = unit === 'day' && count > 730 ? ', which Proton cuts to 730 days' : ''
+      addEffect(walk, `deletes it after ${count} ${unit}${count === 1 ? '' : 's'}${capped}`)
+      addUnlocked(walk, 'expire', 'expire')
+      return
+    }
+    case 'reject': {
+      if (command.args.length !== 1 || strings.length !== 1 || strings[0]!.list || strings[0]!.values.length !== 1) {
+        walk.problems.push(`Line ${line}: reject takes one text, the reason the sender is told.`)
+        return
+      }
+      const reason = strings[0]!.values[0]!
+      if (!checkText(reason, line, walk)) return
+      if (!live) return
+      walk.acts = true
+      addEffect(walk, `turns it away and tells the sender ${JSON.stringify(reason)}`)
+      addUnlocked(walk, 'reject', 'reject')
+      return
+    }
+    case 'vacation': {
+      // vacation [:days number] [:subject "text"] [:handle "text"] "answer"
+      let days: number | undefined
+      let subject: string | undefined
+      const args = command.args
+      let index = 0
+      while (index < args.length - 1) {
+        const arg = args[index]!
+        if (arg.kind !== 'tag') break
+        if (!VACATION_TAGS.has(arg.name)) {
+          walk.problems.push(`Line ${line}: :${arg.name} is not a tag vacation may use here. It takes :days, :subject and :handle.`)
+          return
+        }
+        const value = args[index + 1]
+        if (arg.name === 'days') {
+          if (value?.kind !== 'number' || value.value < 1) {
+            walk.problems.push(`Line ${line}: :days takes a whole number of days, at least 1.`)
+            return
+          }
+          days = value.value
+        } else {
+          if (value?.kind !== 'strings' || value.list || value.values.length !== 1) {
+            walk.problems.push(`Line ${line}: :${arg.name} takes one text.`)
+            return
+          }
+          if (!checkText(value.values[0]!, line, walk)) return
+          if (arg.name === 'subject') subject = value.values[0]!
+        }
+        index += 2
+      }
+      const reason = args[index]
+      if (index !== args.length - 1 || reason?.kind !== 'strings' || reason.list || reason.values.length !== 1) {
+        walk.problems.push(`Line ${line}: vacation takes its tags, then one text: the answer.`)
+        return
+      }
+      const answer = reason.values[0]!
+      if (!checkText(answer, line, walk)) return
+      if (!live) return
+      walk.acts = true
+      addEffect(
+        walk,
+        `answers the sender in your name with ${JSON.stringify(answer)}` +
+          (subject !== undefined ? `, under the subject ${JSON.stringify(subject)}` : '') +
+          (days !== undefined ? `, at most once in ${days} day${days === 1 ? '' : 's'} for each sender` : ''),
+      )
+      addUnlocked(walk, 'vacation', 'vacation')
+      return
+    }
+  }
 }
 
 function addEffect(walk: Walk, effect: string): void {
@@ -770,9 +994,14 @@ function checkTags(args: SieveArgument[], line: number, walk: Walk, allowed: Rea
 function walkTests(tests: SieveTest[], walk: Walk): void {
   for (const test of tests) {
     const refused = REFUSED_TESTS[test.name]
-    if (refused) {
-      walk.problems.push(`Line ${test.line}: the test ${test.name} is refused: ${refused}.`)
+    if (refused && !walk.allowed.has('expire')) {
+      walk.problems.push(`Line ${test.line}: the test ${test.name} is refused: ${refused}. ${ALLOW_HINT}`)
       addRefused(walk, test.name)
+    } else if (refused) {
+      // Reading the expiry changes nothing; its tags and strings are checked below.
+      if (test.name === 'hasexpiration' && test.args.length > 0) {
+        walk.problems.push(`Line ${test.line}: hasexpiration takes no arguments.`)
+      }
     } else if (!TESTS.has(test.name)) {
       walk.problems.push(`Line ${test.line}: ${test.name} is not a test a proposed filter may use.`)
       addRefused(walk, `the unknown test ${test.name}`)
@@ -845,13 +1074,26 @@ function walkCommands(commands: SieveCommand[], walk: Walk, reachable: boolean):
       walkCommands(command.block ?? [], walk, runs)
       // A branch that always runs leaves the rest of the chain unreachable.
       if (verdict === true) chainSettled = true
-      // A rule that always runs and returns ends the script for every message.
-      if (runs && verdict === true && name === 'if' && (command.block ?? []).some((inner) => inner.name === 'return')) {
+      // A rule that always runs and returns ends the script for every message,
+      // and one that always stops ends every filter.
+      if (
+        runs &&
+        verdict === true &&
+        name === 'if' &&
+        (command.block ?? []).some((inner) => inner.name === 'return' || inner.name === 'stop')
+      ) {
         live = false
       }
+    } else if (REFUSED_COMMANDS[name] && COMMAND_UNLOCKS[name] && walk.allowed.has(COMMAND_UNLOCKS[name])) {
+      if (command.block) walk.problems.push(`Line ${command.line}: ${name} takes no block.`)
+      if (command.tests.length > 0) walk.problems.push(`Line ${command.line}: ${name} takes no condition.`)
+      checkUnlocked(command, walk, live)
+      // stop ends the filters, so nothing after it runs.
+      if (name === 'stop') live = false
     } else if (REFUSED_COMMANDS[name]) {
       walk.problems.push(
-        `Line ${command.line}: ${name} is refused: ${REFUSED_COMMANDS[name]}. Only the user can add it, in Proton's settings.`,
+        `Line ${command.line}: ${name} is refused: ${REFUSED_COMMANDS[name]}.` +
+          (COMMAND_UNLOCKS[name] ? ` ${ALLOW_HINT}` : " Only the user can add it, in Proton's settings."),
       )
       addRefused(walk, name)
     } else if (!ACTIONS.has(name)) {
@@ -880,10 +1122,20 @@ function checkAction(command: SieveCommand, walk: Walk, live: boolean): void {
       const target = values[0]!
       const segments = folderSegments(target)
       const hidden = segments.find((segment) => HIDDEN_SEGMENTS.has(segment))
+      if (hidden && walk.allowed.has('trash')) {
+        if (!live) return
+        walk.acts = true
+        const place = hidden === 'trash' ? 'Trash' : 'Spam'
+        // Named as what it may well be, with the name as written.
+        addEffect(walk, `moves it to ${place}${target === place ? '' : `, written ${JSON.stringify(target)}`}`)
+        addUnlocked(walk, 'trash', `filing into ${place}`)
+        walk.movesAway = true
+        return
+      }
       if (hidden) {
         walk.problems.push(
           `Line ${command.line}: filing into ${JSON.stringify(target)} is refused: it names ${hidden === 'trash' ? 'Trash' : 'Spam'}, which hides mail. ` +
-            "Only the user can add it, in Proton's settings.",
+            ALLOW_HINT,
         )
         addRefused(walk, hidden === 'trash' ? 'filing into Trash' : 'filing into Spam')
         return
@@ -984,7 +1236,7 @@ function checkAction(command: SieveCommand, walk: Walk, live: boolean): void {
  * Every problem is listed, not just the first, so an assistant can correct
  * the script in one go rather than one refusal at a time.
  */
-export function reviewSieve(source: string): SieveReview {
+export function reviewSieve(source: string, allowed: ReadonlySet<Unlockable> = NO_UNLOCKS): SieveReview {
   const problems: string[] = []
   if (source.length > MAX_SCRIPT_LENGTH) {
     return {
@@ -992,6 +1244,7 @@ export function reviewSieve(source: string): SieveReview {
       effects: [],
       warnings: [],
       refused: ['a script too long to be checked here'],
+      unlocked: [],
     }
   }
   const hidden = describeCharacter(source, INVISIBLE)
@@ -1005,7 +1258,9 @@ export function reviewSieve(source: string): SieveReview {
   if (control) problems.push(`Line ${control.line}: the script contains a control character (${control.code}).`)
   const lone = describeCharacter(source, LONE_CR)
   if (lone) problems.push(`Line ${lone.line}: a carriage return stands without a line feed, which readers split differently.`)
-  if (problems.length > 0) return { problems, effects: [], warnings: [], refused: ['characters that hide what the script does'] }
+  if (problems.length > 0) {
+    return { problems, effects: [], warnings: [], refused: ['characters that hide what the script does'], unlocked: [] }
+  }
 
   let commands: SieveCommand[]
   let comments: SieveComment[]
@@ -1015,7 +1270,13 @@ export function reviewSieve(source: string): SieveReview {
     commands = new Parser(read.tokens).parse()
   } catch (error) {
     if (error instanceof SieveSyntaxError) {
-      return { problems: [`Line ${error.line}: ${error.message}`], effects: [], warnings: [], refused: ['a script this check cannot read'] }
+      return {
+        problems: [`Line ${error.line}: ${error.message}`],
+        effects: [],
+        warnings: [],
+        refused: ['a script this check cannot read'],
+        unlocked: [],
+      }
     }
     throw error
   }
@@ -1049,9 +1310,10 @@ export function reviewSieve(source: string): SieveReview {
         const verdict = EXTENSIONS[extension]
         if (verdict === undefined || list.raws[position] !== value || list.multiLine) {
           problems.push(`Line ${command.line}: the extension "${value}" is not one a proposed filter may use.`)
-        } else if (verdict !== true) {
+        } else if (verdict !== true && !(EXTENSION_UNLOCKS[extension] && allowed.has(EXTENSION_UNLOCKS[extension]))) {
           problems.push(
-            `Line ${command.line}: the extension "${value}" is refused: ${verdict}. Only the user can add it, in Proton's settings.`,
+            `Line ${command.line}: the extension "${value}" is refused: ${verdict}. ` +
+              (EXTENSION_UNLOCKS[extension] ? ALLOW_HINT : "Only the user can add it, in Proton's settings."),
           )
           refusedExtensions.push(
             extension === 'vnd.proton.expire'
@@ -1085,7 +1347,17 @@ export function reviewSieve(source: string): SieveReview {
     index++
   }
 
-  const walk: Walk = { problems, effects: [], refused: [], marksRead: false, movesAway: false, acts: false }
+  const walk: Walk = {
+    problems,
+    effects: [],
+    refused: [],
+    marksRead: false,
+    movesAway: false,
+    acts: false,
+    allowed,
+    unlocked: [],
+    uses: new Set(),
+  }
   for (const extension of refusedExtensions) addRefused(walk, extension)
   walkCommands(commands.slice(index), walk, true)
 
@@ -1102,7 +1374,14 @@ export function reviewSieve(source: string): SieveReview {
   } else if (walk.marksRead) {
     warnings.push('Matching mail is marked as read, so it does not show up as new.')
   }
-  return { problems, effects: walk.effects, warnings, refused: walk.refused }
+  // Each allowed action that can run is named once more, with what it costs.
+  for (const action of UNLOCKABLE) {
+    if (walk.uses.has(action)) warnings.push(UNLOCKABLE_TEXT[action].risk)
+  }
+  if (walk.uses.has('vacation')) {
+    warnings.push('Proton sends automatic answers only on paid plans, and none to mail in Spam.')
+  }
+  return { problems, effects: walk.effects, warnings, refused: walk.refused, unlocked: walk.unlocked }
 }
 
 /**

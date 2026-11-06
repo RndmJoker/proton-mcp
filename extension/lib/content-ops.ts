@@ -5,7 +5,8 @@
  * Reading goes straight to Proton. Every write first asks whether the page is
  * still signed in to the account the change was agreed for, since a page can
  * switch accounts in between, and checks the script once more with the rules
- * of sieve.ts: this is the last step before Proton gets it.
+ * of sieve.ts and what the user allowed in the popup: this is the last step
+ * before Proton gets it.
  */
 
 import type { ProtonApi } from './proton-api.js'
@@ -43,9 +44,25 @@ export async function runContentOp(api: ProtonApi, op: ContentOp): Promise<unkno
       const filter = listed.value.find((candidate) => candidate.id === op.filterId)
       if (!filter) return { ok: false, error: 'not-found', message: 'The filter does not exist any more.' } satisfies ContentRefusal
       if (!sameScript(filter.sieve, op.sieve)) return refused('The filter changed since applying it was agreed to.')
-      const problems = reviewSieve(filter.sieve).problems
+      const problems = reviewSieve(filter.sieve, new Set(op.allowed)).problems
       if (problems.length > 0) return refused(problems.join(' '))
       return api.apply(filter.id)
+    }
+    case 'delete':
+    case 'status': {
+      // The filter as it was agreed to: a filter changed since is neither
+      // deleted nor switched, and one switched on passes the rules.
+      const listed = await api.filters()
+      if (!listed.ok) return listed
+      const filter = listed.value.find((candidate) => candidate.id === op.filterId)
+      if (!filter) return { ok: false, error: 'not-found', message: 'The filter does not exist any more.' } satisfies ContentRefusal
+      if (!sameScript(filter.sieve, op.sieve)) return refused('The filter changed since this was agreed to.')
+      if (op.op === 'delete') return api.delete(filter.id)
+      if (op.enabled) {
+        const problems = reviewSieve(filter.sieve, new Set(op.allowed)).problems
+        if (problems.length > 0) return refused(problems.join(' '))
+      }
+      return api.setStatus(filter.id, op.enabled)
     }
     case 'order': {
       // Every filter Proton has, each once, and nothing else: a list that
@@ -61,7 +78,7 @@ export async function runContentOp(api: ProtonApi, op: ContentOp): Promise<unkno
     }
     case 'add':
     case 'update': {
-      const problems = [filterNameProblem(op.name), ...reviewSieve(op.sieve).problems].filter(
+      const problems = [filterNameProblem(op.name), ...reviewSieve(op.sieve, new Set(op.allowed)).problems].filter(
         (problem): problem is string => problem !== undefined,
       )
       if (problems.length > 0) return refused(problems.join(' '))

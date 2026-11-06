@@ -17,7 +17,7 @@
 
 import { browser } from 'wxt/browser'
 import { diffLines } from '../../lib/diff.js'
-import type { PendingApply, PendingProposal, PendingReorder, PendingSave } from '../../lib/ops.js'
+import type { PendingApply, PendingDelete, PendingProposal, PendingReorder, PendingSave, PendingStatus } from '../../lib/ops.js'
 
 /** How long the buttons stay locked after the window opens or comes to the front. */
 const LOCK_MS = 1_500
@@ -242,6 +242,63 @@ function renderReorder(proposal: PendingReorder): void {
   actions('Save the new order', 'Cancel')
 }
 
+function renderDelete(proposal: PendingDelete): void {
+  const filter = proposal.filter
+  const title = 'Delete a mail filter?'
+  document.title = title
+  app.append(
+    el('h1', title),
+    el('p', 'An assistant asked for this through proton-mcp. Nothing changes until you choose below.', 'lead'),
+  )
+  const facts = el('dl')
+  row(facts, 'Account', proposal.account)
+  row(facts, 'Name', filter.name || '(no name)')
+  row(facts, 'Status', filter.enabled ? 'on' : 'off')
+  row(facts, 'What it does now', effectList(proposal))
+  app.append(
+    facts,
+    el(
+      'p',
+      'Deleted, the filter is gone for good: Proton keeps no copy, and it can only be set up again. Its whole ' +
+        'script is below, to copy if you might want it back.',
+      'warning',
+    ),
+    el('h2', 'The whole script'),
+    el('pre', filter.sieve),
+  )
+  actions('Delete the filter', 'Cancel')
+}
+
+function renderStatus(proposal: PendingStatus): void {
+  const filter = proposal.filter
+  const on = proposal.enabled
+  const title = on ? 'Switch a mail filter on?' : 'Switch a mail filter off?'
+  document.title = title
+  app.append(
+    el('h1', title),
+    el('p', 'An assistant asked for this through proton-mcp. Nothing changes until you choose below.', 'lead'),
+  )
+  const facts = el('dl')
+  row(facts, 'Account', proposal.account)
+  row(facts, 'Name', filter.name || '(no name)')
+  row(facts, on ? 'Matching mail, from then on' : 'What it stops doing', effectList(proposal))
+  app.append(facts)
+  for (const warning of proposal.warnings) app.append(el('p', warning, 'warning'))
+  app.append(
+    el(
+      'p',
+      on
+        ? 'From then on it acts on every message that arrives.'
+        : 'From then on it runs on no message and keeps its script until it is switched on again. Nothing but ' +
+            "the filter list in Proton's settings shows that it is off.",
+      on ? 'muted' : 'warning',
+    ),
+    el('h2', 'The whole script'),
+    el('pre', filter.sieve),
+  )
+  actions(on ? 'Switch it on' : 'Switch it off', 'Cancel')
+}
+
 async function main(): Promise<void> {
   const proposal = (await browser.runtime.sendMessage({ type: 'proposal', id })) as PendingProposal | undefined
   app.replaceChildren()
@@ -257,9 +314,22 @@ async function main(): Promise<void> {
     )
     return
   }
-  if (proposal.kind === 'apply') renderApply(proposal)
-  else if (proposal.kind === 'reorder') renderReorder(proposal)
-  else renderSave(proposal)
+  switch (proposal.kind) {
+    case 'apply':
+      renderApply(proposal)
+      break
+    case 'reorder':
+      renderReorder(proposal)
+      break
+    case 'delete':
+      renderDelete(proposal)
+      break
+    case 'status':
+      renderStatus(proposal)
+      break
+    default:
+      renderSave(proposal)
+  }
   app.focus()
 }
 

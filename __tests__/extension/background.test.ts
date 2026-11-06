@@ -117,6 +117,19 @@ function fakeProton() {
         for (const filter of model.filters) filter.Priority = ids.indexOf(filter.ID) + 1
         return json({ Code: 1000 })
       }
+      if (path.startsWith('/api/mail/v4/filters/') && method === 'DELETE') {
+        const index = model.filters.findIndex((candidate) => candidate.ID === path.slice('/api/mail/v4/filters/'.length))
+        if (index < 0) return json({ Code: 2501, Error: 'Not found' }, 422)
+        model.filters.splice(index, 1)
+        return json({ Code: 1000 })
+      }
+      const toggle = /^\/api\/mail\/v4\/filters\/(.+)\/(enable|disable)$/.exec(path)
+      if (toggle && method === 'PUT') {
+        const filter = model.filters.find((candidate) => candidate.ID === toggle[1])
+        if (!filter) return json({ Code: 2501, Error: 'Not found' }, 422)
+        filter.Status = toggle[2] === 'enable' ? 1 : 0
+        return json({ Code: 1000 })
+      }
       if (path.startsWith('/api/mail/v4/filters/') && method === 'PUT') {
         const filter = model.filters.find((candidate) => candidate.ID === path.slice('/api/mail/v4/filters/'.length))
         if (!filter) return json({ Code: 2501, Error: 'Not found' }, 422)
@@ -241,8 +254,8 @@ function fromPage(page: 'confirm' | 'popup', message: unknown, tab?: number): Pr
 const propose = (extra: Record<string, unknown> = {}, proposal: Record<string, unknown> = {}) =>
   ask({ kind: 'propose_filter', account: ACCOUNT, confirm: true, applyAllowed: true, proposal: { name: 'Travel', sieve: GOOD, ...proposal }, ...extra })
 
-const switches = (on: Partial<Record<'save' | 'apply' | 'reorder', boolean>>) =>
-  local.set({ switches: { save: false, apply: false, reorder: false, ...on } })
+const switches = (on: Partial<Record<'save' | 'apply' | 'reorder' | 'delete' | 'status', boolean>>) =>
+  local.set({ switches: { save: false, apply: false, reorder: false, delete: false, status: false, ...on } })
 
 const changes = async () => ((await local.get('changes')).changes ?? []) as Array<Record<string, unknown>>
 const queue = async () => ((await local.get('queue')).queue ?? []) as Array<Record<string, unknown>>
@@ -322,7 +335,7 @@ describe('the window', () => {
   })
 
   it('lets only the popup change the switches', async () => {
-    const on = { save: true, apply: true, reorder: true }
+    const on = { save: true, apply: true, reorder: true, delete: true, status: true }
     expect(await fromPage('confirm', { type: 'switches', switches: on }, windows[0]?.tab ?? 100)).toBeUndefined()
     expect((await local.get('switches')).switches).toBeUndefined()
     expect(await fromPage('popup', { type: 'switches', switches: on })).toEqual({ ok: true })
@@ -507,5 +520,99 @@ describe('after Chrome or the extension restarted', () => {
     await session.set({ queueSession: true })
     background.main()
     await vi.waitFor(() => expect(proton.model.applied).toEqual(['f1==']))
+  })
+})
+
+describe('what filters may do, allowed in the popup (06.11.2026)', () => {
+  const DELETES = GOOD.replace('fileinto "Travel";', 'discard;')
+
+  it('lets only the popup allow it', async () => {
+    expect(await fromPage('confirm', { type: 'unlocks', actions: ['discard'] }, 100)).toBeUndefined()
+    expect((await local.get('unlocks')).unlocks).toBeUndefined()
+    expect(await fromPage('popup', { type: 'unlocks', actions: ['discard'] })).toEqual({ ok: true })
+    expect((await fromPage('popup', { type: 'status' }))?.unlocks).toEqual(['discard'])
+  })
+
+  it('refuses what the popup did not allow, whatever the server checked', async () => {
+    // A program that reached the connector cannot allow anything.
+    expect(await propose({}, { name: 'Gone', sieve: DELETES })).toMatchObject({ ok: false, error: 'refused' })
+    expect(windows).toEqual([])
+  })
+
+  it('takes it once allowed there, all the way to the page script', async () => {
+    await local.set({ unlocks: ['discard'] })
+    expect(await propose({}, { name: 'Gone', sieve: DELETES })).toMatchObject({ outcome: 'shown' })
+    const { id, tab } = windows[0]!
+    const pending = (await session.get(`proposal:${id}`))[`proposal:${id}`] as { effects: string[]; warnings: string[] }
+    expect(pending.effects).toContain('deletes it at once and for good')
+    expect(pending.warnings.join(' ')).toContain('deleted at once and for good')
+    expect(await fromPage('confirm', { type: 'decide', id, accept: true }, tab)).toMatchObject({ ok: true })
+    expect(proton.model.filters.map((filter) => filter.Name)).toEqual(['Gone'])
+  })
+})
+
+describe('deleting and switching (06.11.2026)', () => {
+  beforeEach(() => {
+    proton.model.filters.push(
+      { ID: 'f1==', Name: 'Travel', Status: 1, Priority: 1, Version: 2, Sieve: GOOD },
+      { ID: 'f2==', Name: 'Gone', Status: 0, Priority: 2, Version: 2, Sieve: GOOD.replace('fileinto "Travel";', 'discard;') },
+    )
+  })
+  const remove = (filterId: string, confirm = true) => ask({ kind: 'delete_filter', account: ACCOUNT, filterId, confirm })
+  const status = (filterId: string, enabled: boolean, confirm = true) =>
+    ask({ kind: 'set_filter_status', account: ACCOUNT, filterId, enabled, confirm })
+
+  it('deletes after the yes in the window, and keeps the filter after a no', async () => {
+    expect(await remove('f1==')).toMatchObject({ outcome: 'shown' })
+    const first = windows[0]!
+    const pending = (await session.get(`proposal:${first.id}`))[`proposal:${first.id}`] as { kind: string; effects: string[] }
+    expect(pending).toMatchObject({ kind: 'delete', effects: ['files it into "Travel"'] })
+    expect(await fromPage('confirm', { type: 'decide', id: first.id, accept: false }, first.tab)).toMatchObject({ ok: true })
+    expect(proton.model.filters).toHaveLength(2)
+
+    await remove('f1==')
+    const second = windows[1]!
+    expect(await fromPage('confirm', { type: 'decide', id: second.id, accept: true }, second.tab)).toMatchObject({
+      ok: true,
+      message: expect.stringContaining('Deleted'),
+    })
+    expect(proton.model.filters.map((filter) => filter.ID)).toEqual(['f2=='])
+    expect((await changes())[0]).toMatchObject({ outcome: 'deleted', how: 'confirmed' })
+  })
+
+  it('shows the window for a deletion the server would let go without one, until the popup allows that too', async () => {
+    expect(await remove('f1==', false)).toMatchObject({ outcome: 'shown' })
+    await switches({ delete: true })
+    expect(await remove('f1==', false)).toMatchObject({ outcome: 'deleted' })
+    expect(proton.model.filters.map((filter) => filter.ID)).toEqual(['f2=='])
+  })
+
+  it('does not delete a filter that changed since the yes', async () => {
+    await remove('f1==')
+    proton.model.filters[0]!.Sieve = OTHER
+    const { id, tab } = windows[0]!
+    expect(await fromPage('confirm', { type: 'decide', id, accept: true }, tab)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('changed since'),
+    })
+    expect(proton.model.filters).toHaveLength(2)
+  })
+
+  it('switches a filter off after the yes, and changes nothing for one already in that state', async () => {
+    expect(await status('f2==', false)).toMatchObject({ outcome: 'switched' })
+    expect(windows).toEqual([])
+    expect(await status('f1==', false)).toMatchObject({ outcome: 'shown' })
+    const { id, tab } = windows[0]!
+    expect(await fromPage('confirm', { type: 'decide', id, accept: true }, tab)).toMatchObject({ message: expect.stringContaining('Switched off') })
+    expect(proton.model.filters[0]!.Status).toBe(0)
+  })
+
+  it('switches on a filter that deletes only where the popup allowed deleting', async () => {
+    expect(await status('f2==', true)).toMatchObject({ ok: false, error: 'refused' })
+    await local.set({ unlocks: ['discard'] })
+    await switches({ status: true })
+    expect(await status('f2==', true, false)).toMatchObject({ outcome: 'switched' })
+    expect(proton.model.filters[1]!.Status).toBe(1)
+    expect((await changes())[0]).toMatchObject({ outcome: 'enabled', how: 'without asking' })
   })
 })

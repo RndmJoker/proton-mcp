@@ -45,9 +45,11 @@ import {
   type ToolLevelView,
   type LimitsView,
   type RecordView,
+  type FilterActionsView,
 } from './sections.js'
 import type { Section, DisclaimerState } from './layout.js'
 import type { Level, SendLimits, RecordCopy } from '../settings.js'
+import { UNLOCKABLE, type Unlockable } from '../filters/sieve.js'
 
 /**
  * Upper bound for a request body.
@@ -88,6 +90,7 @@ const FORM_SECTIONS: Record<string, Section> = {
   '/permissions/levels': 'permissions',
   '/permissions/limits': 'permissions',
   '/permissions/record': 'permissions',
+  '/permissions/filter-actions': 'permissions',
 }
 
 /**
@@ -151,6 +154,10 @@ export interface WebInterfaceOptions {
   getRecord?: () => RecordView
   /** Stores it, or removes it with undefined. Returns an error to show, or nothing. */
   onRecord?: (record: RecordCopy | undefined) => Promise<string | undefined>
+  /** What a filter from an assistant may do beyond filing and flags, for the pages. */
+  getFilterActions?: () => FilterActionsView
+  /** Stores it. Returns an error to show, or nothing. */
+  onFilterActions?: (actions: Unlockable[]) => Promise<string | undefined>
   /**
    * Called when the user signs in. Returns an error message to show, or nothing
    * on success. The master password is only set for the encrypted-file store.
@@ -577,6 +584,10 @@ export class WebInterface {
       await this.#handleRecord(response, body.fields)
       return
     }
+    if (writing && path === '/permissions/filter-actions') {
+      await this.#handleFilterActions(response, body.fields)
+      return
+    }
     if (writing && path === '/dismiss-notice') {
       await this.#handleDismissNotice(response, body.fields)
       return
@@ -723,8 +734,10 @@ export class WebInterface {
           csrfLevels: csrfToken(this.#secrets, '/permissions/levels'),
           csrfLimits: csrfToken(this.#secrets, '/permissions/limits'),
           csrfRecord: csrfToken(this.#secrets, '/permissions/record'),
+          csrfFilterActions: csrfToken(this.#secrets, '/permissions/filter-actions'),
           ...(permissions ? { tools: permissions.tools, limits: permissions.limits } : {}),
           ...(this.#options.getRecord ? { record: this.#options.getRecord() } : {}),
+          ...(this.#options.getFilterActions ? { filterActions: this.#options.getFilterActions() } : {}),
           ...banners,
         })
         break
@@ -744,6 +757,7 @@ export class WebInterface {
             const record = this.#options.getRecord?.()
             return record?.address ? { record: { address: record.address, mode: record.mode ?? 'bcc' } } : {}
           })(),
+          ...(this.#options.getFilterActions ? { filterActions: this.#options.getFilterActions().allowed } : {}),
           ...(this.#options.getPermissions
             ? {
                 departures: this.#options
@@ -870,6 +884,38 @@ export class WebInterface {
 
     const failure = await this.#options.onLimits(limits)
     await this.#render('permissions', response, failure ? { error: failure } : { notice: 'The bounds are saved.' })
+  }
+
+  /**
+   * Takes what filters may do from the form: only the actions the page
+   * offers, each only as a ticked box, and nothing the environment fixed.
+   */
+  async #handleFilterActions(response: ServerResponse, fields: Record<string, string>): Promise<void> {
+    if (!this.#options.onFilterActions || !this.#options.getFilterActions) {
+      await this.#render('permissions', response, { error: 'This server cannot store what filters may do.' })
+      return
+    }
+    if (this.#options.getFilterActions().fixed) {
+      await this.#render('permissions', response, {
+        error: 'What filters may do is set in the environment (PROTON_MCP_FILTER_ACTIONS), so it is not changed here.',
+      })
+      return
+    }
+    const named = Object.keys(fields)
+      .filter((key) => key.startsWith('action:'))
+      .map((key) => key.slice('action:'.length))
+    const unknown = named.find((name) => !(UNLOCKABLE as readonly string[]).includes(name))
+    if (unknown !== undefined) {
+      await this.#render('permissions', response, { error: `"${unknown}" is not an action a filter can be allowed.` })
+      return
+    }
+    const odd = named.find((name) => fields[`action:${name}`] !== 'on')
+    if (odd !== undefined) {
+      await this.#render('permissions', response, { error: `The box for ${odd} came back with a value it does not have.` })
+      return
+    }
+    const failure = await this.#options.onFilterActions(UNLOCKABLE.filter((action) => named.includes(action)))
+    await this.#render('permissions', response, failure ? { error: failure } : { notice: 'What filters may do is saved.' })
   }
 
   /** Takes the copy recipient from the form. An empty address removes it. */

@@ -42,14 +42,14 @@ describe('what a move passes', () => {
     expect(movedFilters(ORDER, after, ['d'])).toEqual([{ id: 'd', from: 4, to: 2, before: ['b', 'c'], after: [] }])
   })
 
-  it('warns where a moved or passed filter does something an assistant may not set up', () => {
+  it('warns where a moved or passed filter does more than file and flag', () => {
     const after = applyMoves(ORDER, [{ id: 'd', position: 2 }])
     const warnings = orderWarnings(
       movedFilters(ORDER, after, ['d']),
       (id) => (id === 'c' ? ['filing into Trash'] : []),
       (id) => id.toUpperCase(),
     )
-    expect(warnings).toEqual(['"C" does what an assistant may not set up (filing into Trash), and its place relative to "D" changes.'])
+    expect(warnings).toEqual(['"C" does more than file and flag (filing into Trash), and its place relative to "D" changes.'])
   })
 })
 

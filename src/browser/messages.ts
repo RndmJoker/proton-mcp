@@ -6,7 +6,7 @@
  * starts relays, and the extension does the work in the signed-in Proton page.
  * Each of them checks every message against the fixed list below and drops
  * anything else, so a program that reaches one of the channels can ask for
- * nothing beyond these five things. Unknown fields are refused rather than
+ * nothing beyond these seven things. Unknown fields are refused rather than
  * ignored: a field nobody reads today is one somebody may read tomorrow.
  *
  * The limits here are about shape, not about what is allowed. Whether a script
@@ -61,6 +61,8 @@ export type BrowserRequest =
     }
   | { kind: 'apply_filter'; account: string; filterId: string; confirm: boolean }
   | { kind: 'reorder_filters'; account: string; moves: FilterMoveRequest[]; confirm: boolean }
+  | { kind: 'delete_filter'; account: string; filterId: string; confirm: boolean }
+  | { kind: 'set_filter_status'; account: string; filterId: string; enabled: boolean; confirm: boolean }
 
 export interface ProtonFilter {
   id: string
@@ -101,7 +103,7 @@ const ERROR_CODES: ReadonlySet<string> = new Set<BrowserErrorCode>([
 
 /** An action waiting in the extension's queue because Proton was busy with an earlier one. */
 export interface QueuedAction {
-  action: 'save' | 'apply' | 'reorder'
+  action: 'save' | 'apply' | 'reorder' | 'delete' | 'status'
   name: string
   /** When it was queued, in milliseconds since 1970. */
   since: number
@@ -112,12 +114,35 @@ export interface QueuedAction {
 export interface RecentChange {
   at: number
   name: string
-  outcome: 'added' | 'replaced' | 'applied' | 'reordered' | 'rejected' | 'failed' | 'queued' | 'cancelled'
+  outcome:
+    | 'added'
+    | 'replaced'
+    | 'applied'
+    | 'reordered'
+    | 'deleted'
+    | 'enabled'
+    | 'disabled'
+    | 'rejected'
+    | 'failed'
+    | 'queued'
+    | 'cancelled'
   how: 'confirmed' | 'without asking'
   detail?: string
 }
 
-const OUTCOMES: ReadonlySet<string> = new Set(['added', 'replaced', 'applied', 'reordered', 'rejected', 'failed', 'queued', 'cancelled'])
+const OUTCOMES: ReadonlySet<string> = new Set([
+  'added',
+  'replaced',
+  'applied',
+  'reordered',
+  'deleted',
+  'enabled',
+  'disabled',
+  'rejected',
+  'failed',
+  'queued',
+  'cancelled',
+])
 
 export type BrowserResponse =
   | { ok: true; kind: 'status'; extensionVersion: string; protonTabs: number }
@@ -132,6 +157,8 @@ export type BrowserResponse =
     }
   | { ok: true; kind: 'apply_filter'; outcome: 'shown' | 'applied' | 'queued' }
   | { ok: true; kind: 'reorder_filters'; outcome: 'shown' | 'reordered' | 'queued' }
+  | { ok: true; kind: 'delete_filter'; outcome: 'shown' | 'deleted' | 'queued' }
+  | { ok: true; kind: 'set_filter_status'; outcome: 'shown' | 'switched' | 'queued' }
   | { ok: false; error: BrowserErrorCode; message: string }
 
 /** Generous bounds on shape. The real limits on names and scripts are in sieve.ts. */
@@ -189,7 +216,7 @@ function parseMoves(value: unknown): FilterMoveRequest[] | undefined {
   return moves
 }
 
-/** A request as one of the five kinds, or nothing when it is anything else. */
+/** A request as one of the seven kinds, or nothing when it is anything else. */
 export function parseRequest(value: unknown): BrowserRequest | undefined {
   if (!isPlain(value)) return undefined
   switch (value.kind) {
@@ -230,6 +257,21 @@ export function parseRequest(value: unknown): BrowserRequest | undefined {
       const moves = parseMoves(value.moves)
       return moves ? { kind: 'reorder_filters', account: value.account, moves, confirm: value.confirm } : undefined
     }
+    case 'delete_filter':
+      if (!hasOnly(value, ['kind', 'account', 'filterId', 'confirm'])) return undefined
+      if (!isAccount(value.account) || !isFilterId(value.filterId) || typeof value.confirm !== 'boolean') return undefined
+      return { kind: 'delete_filter', account: value.account, filterId: value.filterId, confirm: value.confirm }
+    case 'set_filter_status':
+      if (!hasOnly(value, ['kind', 'account', 'filterId', 'enabled', 'confirm'])) return undefined
+      if (!isAccount(value.account) || !isFilterId(value.filterId)) return undefined
+      if (typeof value.enabled !== 'boolean' || typeof value.confirm !== 'boolean') return undefined
+      return {
+        kind: 'set_filter_status',
+        account: value.account,
+        filterId: value.filterId,
+        enabled: value.enabled,
+        confirm: value.confirm,
+      }
     default:
       return undefined
   }
@@ -310,6 +352,14 @@ export function parseResponse(value: unknown): BrowserResponse | undefined {
       if (!hasOnly(value, ['ok', 'kind', 'outcome'])) return undefined
       if (value.outcome !== 'shown' && value.outcome !== 'reordered' && value.outcome !== 'queued') return undefined
       return { ok: true, kind: 'reorder_filters', outcome: value.outcome }
+    case 'delete_filter':
+      if (!hasOnly(value, ['ok', 'kind', 'outcome'])) return undefined
+      if (value.outcome !== 'shown' && value.outcome !== 'deleted' && value.outcome !== 'queued') return undefined
+      return { ok: true, kind: 'delete_filter', outcome: value.outcome }
+    case 'set_filter_status':
+      if (!hasOnly(value, ['ok', 'kind', 'outcome'])) return undefined
+      if (value.outcome !== 'shown' && value.outcome !== 'switched' && value.outcome !== 'queued') return undefined
+      return { ok: true, kind: 'set_filter_status', outcome: value.outcome }
     default:
       return undefined
   }
@@ -320,9 +370,14 @@ function parseQueue(value: unknown): QueuedAction[] | undefined {
   const queue: QueuedAction[] = []
   for (const entry of value) {
     if (!isPlain(entry) || !hasOnly(entry, ['action', 'name', 'since', 'attempts'])) return undefined
-    if (entry.action !== 'save' && entry.action !== 'apply' && entry.action !== 'reorder') return undefined
+    if (!['save', 'apply', 'reorder', 'delete', 'status'].includes(entry.action as string)) return undefined
     if (!isText(entry.name, LIMITS.name, true) || !Number.isInteger(entry.since) || !Number.isInteger(entry.attempts)) return undefined
-    queue.push({ action: entry.action, name: entry.name, since: entry.since as number, attempts: entry.attempts as number })
+    queue.push({
+      action: entry.action as QueuedAction['action'],
+      name: entry.name,
+      since: entry.since as number,
+      attempts: entry.attempts as number,
+    })
   }
   return queue
 }

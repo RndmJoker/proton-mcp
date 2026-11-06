@@ -8,9 +8,10 @@
  * all of them at once.
  *
  * What lives here: the Bridge ports, the PIN that guards changes, what the
- * assistant may do per tool and within which bounds, a recipient added to
- * every message sent, and a counter that tells every server to reread the
- * stored credentials after a sign-in or a sign-out somewhere else.
+ * assistant may do per tool and within which bounds, what a filter from it may
+ * do beyond filing and flags, a recipient added to every message sent, and a
+ * counter that tells every server to reread the stored credentials after a
+ * sign-in or a sign-out somewhere else.
  *
  * **The host is deliberately not settable here.** It stays with the environment,
  * where changing it is a conscious act. A host field in a web form is a field
@@ -27,6 +28,7 @@ import { watch, mkdirSync, type FSWatcher } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { StoredPin } from './web/security.js'
+import { UNLOCKABLE, type Unlockable } from './filters/sieve.js'
 
 /** What the assistant may do with one tool. */
 export type Level = 'off' | 'ask' | 'act'
@@ -74,6 +76,8 @@ export interface StoredSettings {
   levels?: Record<string, Level>
   limits?: SendLimits
   record?: RecordCopy
+  /** What a filter from an assistant may do beyond filing and flags. Absent means nothing more. */
+  filterActions?: Unlockable[]
 }
 
 /** Where the settings live. Next to the credentials, under the user's own data. */
@@ -150,6 +154,12 @@ export function sanitise(candidate: Record<string, unknown>): StoredSettings {
     (record.mode === 'cc' || record.mode === 'bcc')
   ) {
     settings.record = { address: record.address, mode: record.mode }
+  }
+
+  // Names a later version no longer knows are dropped, one by one.
+  if (Array.isArray(candidate.filterActions)) {
+    const known = UNLOCKABLE.filter((action) => (candidate.filterActions as unknown[]).includes(action))
+    if (known.length > 0) settings.filterActions = known
   }
 
   return settings

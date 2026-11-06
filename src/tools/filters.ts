@@ -44,8 +44,9 @@ export const SIEVE_GUIDE = 'https://proton.me/support/sieve-advanced-custom-filt
 export const DESCRIPTION =
   'Explains how to work on Proton Mail filters, the rules for sorting incoming mail, by hand: ' +
   "through Proton's settings page in a browser, in Sieve, with the user agreeing to each " +
-  'change. Reading, proposing, applying and moving filters goes through list_filters, ' +
-  'get_filters, propose_filter, apply_filter and reorder_filters, which use the browser extension ' +
+  'change. Reading, proposing, applying, moving, deleting and switching filters goes through ' +
+  'list_filters, get_filters, propose_filter, apply_filter, reorder_filters, delete_filter and ' +
+  'set_filter_status, which use the browser extension ' +
   'Proton MCP Helper; call this when they report that the extension is not active, or when the ' +
   'user wants to make a change themselves.'
 
@@ -58,9 +59,10 @@ export const DESCRIPTION =
  */
 export const ANSWER = [
   'The Proton Mail Bridge carries mail over IMAP and SMTP and nothing else, so filters are not ' +
-    'reached through it. This server reads, proposes, applies and moves them through its browser ' +
-    'extension Proton MCP Helper instead: list_filters, get_filters, propose_filter, apply_filter ' +
-    'and reorder_filters. Use those whenever the extension is active.',
+    'reached through it. This server reads, proposes, applies, moves, deletes and switches them ' +
+    'through its browser extension Proton MCP Helper instead: list_filters, get_filters, ' +
+    'propose_filter, apply_filter, reorder_filters, delete_filter and set_filter_status. Use those ' +
+    'whenever the extension is active.',
   '',
   "The way by hand, for when it is not, with the user's agreement:",
   '',

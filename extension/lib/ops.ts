@@ -14,16 +14,24 @@
 
 import type { ProtonFilter, RecentChange } from '../../src/browser/messages.js'
 import type { MovedFilter } from '../../src/filters/order.js'
+import { parseUnlocks, type Unlockable } from '../../src/filters/sieve.js'
 
-/** The background's requests to the script in the Proton page. */
+/**
+ * The background's requests to the script in the Proton page. Every write
+ * carries the account it was agreed for, and every write that sets something
+ * up carries what the user allowed in the popup, so the page script checks the
+ * script once more with the same rules.
+ */
 export type ContentOp =
   | { op: 'addresses' }
   | { op: 'filters' }
   | { op: 'check'; sieve: string }
-  | { op: 'add'; account: string; name: string; sieve: string }
-  | { op: 'update'; account: string; filter: ProtonFilter; name: string; sieve: string }
-  | { op: 'apply'; account: string; filterId: string; sieve: string }
+  | { op: 'add'; account: string; name: string; sieve: string; allowed: Unlockable[] }
+  | { op: 'update'; account: string; filter: ProtonFilter; name: string; sieve: string; allowed: Unlockable[] }
+  | { op: 'apply'; account: string; filterId: string; sieve: string; allowed: Unlockable[] }
   | { op: 'order'; account: string; ids: string[] }
+  | { op: 'delete'; account: string; filterId: string; sieve: string }
+  | { op: 'status'; account: string; filterId: string; enabled: boolean; sieve: string; allowed: Unlockable[] }
 
 interface PendingBase {
   id: string
@@ -59,6 +67,20 @@ export interface PendingApply extends PendingBase {
   filter: ProtonFilter
 }
 
+/** A saved filter to delete for good. */
+export interface PendingDelete extends PendingBase {
+  kind: 'delete'
+  /** The filter as it was stored when deleting it was asked for. */
+  filter: ProtonFilter
+}
+
+/** A saved filter to switch on or off. */
+export interface PendingStatus extends PendingBase {
+  kind: 'status'
+  filter: ProtonFilter
+  enabled: boolean
+}
+
 /** A new order of the filters. */
 export interface PendingReorder extends PendingBase {
   kind: 'reorder'
@@ -71,7 +93,7 @@ export interface PendingReorder extends PendingBase {
 }
 
 /** A proposal waiting in the confirmation window. Kept in session storage, which the Proton page cannot read. */
-export type PendingProposal = PendingSave | PendingApply | PendingReorder
+export type PendingProposal = PendingSave | PendingApply | PendingReorder | PendingDelete | PendingStatus
 
 /** The confirmation window's and the popup's requests to the background. */
 export type PageMessage =
@@ -81,6 +103,7 @@ export type PageMessage =
   | { type: 'reconnect' }
   | { type: 'cancel'; id: string }
   | { type: 'switches'; switches: Switches }
+  | { type: 'unlocks'; actions: Unlockable[] }
 
 /**
  * The extension's own say on acting without its window, per action. All off
@@ -92,16 +115,29 @@ export interface Switches {
   save: boolean
   apply: boolean
   reorder: boolean
+  delete: boolean
+  status: boolean
 }
 
-export const NO_SWITCHES: Switches = { save: false, apply: false, reorder: false }
+const SWITCH_NAMES = ['save', 'apply', 'reorder', 'delete', 'status'] as const
 
+export const NO_SWITCHES: Switches = { save: false, apply: false, reorder: false, delete: false, status: false }
+
+/** The switches as the popup sends them: every one of them, as true or false, and nothing else. */
 export function parseSwitches(value: unknown): Switches | undefined {
-  if (!isRecord(value)) return undefined
-  const { save, apply, reorder } = value
-  if (typeof save !== 'boolean' || typeof apply !== 'boolean' || typeof reorder !== 'boolean') return undefined
-  if (Object.keys(value).length !== 3) return undefined
-  return { save, apply, reorder }
+  if (!isRecord(value) || Object.keys(value).length !== SWITCH_NAMES.length) return undefined
+  if (!SWITCH_NAMES.every((name) => typeof value[name] === 'boolean')) return undefined
+  return Object.fromEntries(SWITCH_NAMES.map((name) => [name, value[name]])) as unknown as Switches
+}
+
+/**
+ * The switches as stored. A version before delete and status stored three, so
+ * a missing one counts as off; anything of another shape counts as all off.
+ */
+export function readSwitches(value: unknown): Switches {
+  if (!isRecord(value) || Object.keys(value).some((key) => !(SWITCH_NAMES as readonly string[]).includes(key))) return NO_SWITCHES
+  if (!Object.values(value).every((entry) => typeof entry === 'boolean')) return NO_SWITCHES
+  return Object.fromEntries(SWITCH_NAMES.map((name) => [name, value[name] === true])) as unknown as Switches
 }
 
 /** What the extension has done, shown in its popup and passed to the server with the filters. */
@@ -130,6 +166,7 @@ function isFilter(value: unknown): value is ProtonFilter {
 
 const text = (value: unknown): value is string => typeof value === 'string' && value.length <= MAX_TEXT
 const account = (value: unknown): value is string => typeof value === 'string' && value.length <= 320 && value.includes('@')
+const filterId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_=-]{1,256}$/.test(value)
 
 export function parseContentOp(value: unknown): ContentOp | undefined {
   if (!isRecord(value)) return undefined
@@ -139,18 +176,34 @@ export function parseContentOp(value: unknown): ContentOp | undefined {
       return { op: value.op }
     case 'check':
       return text(value.sieve) ? { op: 'check', sieve: value.sieve } : undefined
-    case 'add':
-      return account(value.account) && text(value.name) && text(value.sieve)
-        ? { op: 'add', account: value.account, name: value.name, sieve: value.sieve }
+    case 'add': {
+      const allowed = parseUnlocks(value.allowed)
+      return account(value.account) && text(value.name) && text(value.sieve) && allowed
+        ? { op: 'add', account: value.account, name: value.name, sieve: value.sieve, allowed }
         : undefined
-    case 'update':
-      return account(value.account) && isFilter(value.filter) && text(value.name) && text(value.sieve)
-        ? { op: 'update', account: value.account, filter: value.filter, name: value.name, sieve: value.sieve }
+    }
+    case 'update': {
+      const allowed = parseUnlocks(value.allowed)
+      return account(value.account) && isFilter(value.filter) && text(value.name) && text(value.sieve) && allowed
+        ? { op: 'update', account: value.account, filter: value.filter, name: value.name, sieve: value.sieve, allowed }
         : undefined
-    case 'apply':
-      return account(value.account) && typeof value.filterId === 'string' && /^[A-Za-z0-9_=-]{1,256}$/.test(value.filterId) && text(value.sieve)
-        ? { op: 'apply', account: value.account, filterId: value.filterId, sieve: value.sieve }
+    }
+    case 'apply': {
+      const allowed = parseUnlocks(value.allowed)
+      return account(value.account) && filterId(value.filterId) && text(value.sieve) && allowed
+        ? { op: 'apply', account: value.account, filterId: value.filterId, sieve: value.sieve, allowed }
         : undefined
+    }
+    case 'delete':
+      return account(value.account) && filterId(value.filterId) && text(value.sieve)
+        ? { op: 'delete', account: value.account, filterId: value.filterId, sieve: value.sieve }
+        : undefined
+    case 'status': {
+      const allowed = parseUnlocks(value.allowed)
+      return account(value.account) && filterId(value.filterId) && typeof value.enabled === 'boolean' && text(value.sieve) && allowed
+        ? { op: 'status', account: value.account, filterId: value.filterId, enabled: value.enabled, sieve: value.sieve, allowed }
+        : undefined
+    }
     case 'order':
       return account(value.account) &&
         Array.isArray(value.ids) &&
@@ -182,6 +235,10 @@ export function parsePageMessage(value: unknown): PageMessage | undefined {
     case 'switches': {
       const switches = parseSwitches(value.switches)
       return switches ? { type: 'switches', switches } : undefined
+    }
+    case 'unlocks': {
+      const actions = parseUnlocks(value.actions)
+      return actions ? { type: 'unlocks', actions } : undefined
     }
     default:
       return undefined

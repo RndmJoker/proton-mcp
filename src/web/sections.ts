@@ -22,6 +22,7 @@ import {
   type DisclaimerState,
 } from './layout.js'
 import type { StoreKind } from '../credentials/store.js'
+import { UNLOCKABLE, UNLOCKABLE_TEXT } from '../filters/sieve.js'
 
 /** What every section needs to draw itself. */
 interface Common {
@@ -92,6 +93,8 @@ export interface OverviewData extends Common {
   departures?: Array<{ tool: string; level: string }>
   /** The recipient added to every message sent, when one is. */
   record?: { address: string; mode: 'cc' | 'bcc' }
+  /** What a filter from an assistant may do beyond filing and flags. */
+  filterActions?: string[]
 }
 
 /**
@@ -158,8 +161,19 @@ export function overviewSection(data: OverviewData): string {
     row(
       'Assistant permissions',
       !data.departures || data.departures.length === 0
-        ? 'as by default: sending asks first, everything else acts'
+        ? 'as by default: sending and changing filters ask first, deleting and switching filters is off, everything else acts'
         : data.departures.map((d) => `${d.tool}: ${d.level}`).join(', '),
+    ),
+    row(
+      'Filters may also',
+      data.filterActions && data.filterActions.length > 0
+        ? `<span class="state bad">${escapeHtml(
+            UNLOCKABLE.filter((action) => data.filterActions!.includes(action))
+              .map((action) => UNLOCKABLE_TEXT[action].title.toLowerCase())
+              .join(', '),
+          )}</span>`
+        : 'nothing beyond filing and flags',
+      true,
     ),
     row(
       'Copy of everything sent',
@@ -436,14 +450,80 @@ export interface RecordView {
   fixed: boolean
 }
 
+/** What a filter from an assistant may do beyond filing and flags, as the page shows it. */
+export interface FilterActionsView {
+  allowed: string[]
+  /** Set in the environment, and so not changeable here. */
+  fixed: boolean
+}
+
 export interface PermissionsData extends Common {
   csrfPin: string
   csrfLevels?: string
   csrfLimits?: string
   csrfRecord?: string
+  csrfFilterActions?: string
   tools?: ToolLevelView[]
   limits?: LimitsView
   record?: RecordView
+  filterActions?: FilterActionsView
+}
+
+/**
+ * What a filter may do beyond filing and flags: one switch per action, all off
+ * by default (Tobi, 06.11.2026). The extension has the same switches in its
+ * popup, and an action needs both, so a program that reaches only one of the
+ * two cannot allow it.
+ */
+function filterActionsForm(data: PermissionsData): string {
+  const view = data.filterActions
+  if (!view) return ''
+  const rows = UNLOCKABLE.map((action) => {
+    const on = view.allowed.includes(action)
+    const text = UNLOCKABLE_TEXT[action]
+    const control = view.fixed
+      ? `<strong>${on ? 'allowed' : 'not allowed'}</strong>`
+      : `<input type="checkbox" id="action-${action}" name="action:${action}" value="on"${on ? ' checked' : ''}>`
+    return (
+      `<tr><td>${control}</td><td><label for="action-${action}">${escapeHtml(text.title)}</label></td>` +
+      `<td class="hint">${escapeHtml(text.risk)}</td></tr>`
+    )
+  }).join('\n')
+  const allowed = UNLOCKABLE.filter((action) => view.allowed.includes(action))
+  const noPin = data.pinRequired ? '' : '<br><strong>No PIN is set</strong>, so the assistant could also have switched this on itself.'
+  const cost = allowed.length
+    ? `<div class="error"><strong>An assistant may set up filters that ${escapeHtml(
+        allowed.map((action) => UNLOCKABLE_TEXT[action].title.toLowerCase()).join(', '),
+      )}.</strong> A single message can then ask for such a rule, and it keeps acting long after the
+conversation. With ask first you still see each one in the window of the extension before it is saved.${noPin}</div>`
+    : ''
+  const intro = `<p>A filter an assistant proposes may always file mail into folders and labels and set or clear
+the read and star flags. Anything more is up to you, one action at a time. Not allowed, which is the default,
+the assistant can neither set it up nor change, apply or switch on a filter that does it.</p>`
+  const table = `<table>
+  <tr><th></th><th>Action</th><th>What it costs</th></tr>
+  ${rows}
+  </table>`
+  const after = `<p class="hint">The browser extension has the same switches in its popup, and an action needs
+  both. Forwarding is not among them: Proton does not run it in filters, and its own forwarding setting is out
+  of reach of these tools. Proton's check of a script and its spam guard stay in place whatever is allowed.</p>`
+  if (view.fixed) {
+    return `<h2>What a filter may do</h2>
+<div class="card">${cost}${intro}${table}
+<p class="hint">Set in the environment (<code>PROTON_MCP_FILTER_ACTIONS</code>), so it is not changed here.</p>${after}</div>`
+  }
+  return `<h2>What a filter may do</h2>
+<div class="card">
+${cost}
+${intro}
+<form method="post" action="/permissions/filter-actions">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfFilterActions ?? '')}">
+  ${table}
+  ${after}
+  ${pinField(data.pinRequired === true)}
+  <button type="submit">Save what filters may do</button>
+</form>
+</div>`
 }
 
 /** The copy of everything sent: who gets it, and the form to change it. */
@@ -523,8 +603,9 @@ your mailbox to be forwarded, and nobody would see it happen. Bound it below whe
     (filters.length
       ? `<div class="error"><strong>${names(filters)}</strong> A single message can then ask for a rule
 that files mail away from you or marks it as read, and the rule keeps acting long after the conversation.
-Applying one changes the mail that is already there, all of it at once. Deleting, rejecting, answering and
-forwarding stay refused either way, and the extension lists every change in its popup.${noPin}</div>`
+Applying one changes the mail that is already there, all of it at once. What a filter may do beyond filing
+and flags is set below, and the extension asks for the same in its popup, where it also lists every
+change.${noPin}</div>`
       : '')
 
   return `<h2>What the assistant may do</h2>
@@ -638,6 +719,7 @@ made here apply to every running server at once.</p>
 <h2>PIN</h2>
 <div class="card">${pin}</div>
 ${levelTable(data)}
+${filterActionsForm(data)}
 ${limitsForm(data)}
 ${recordForm(data)}`,
   )

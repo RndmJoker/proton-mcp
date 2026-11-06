@@ -8,8 +8,9 @@
  * here against the fixed list, and every script is checked again with the
  * same rules the server used. Neither side trusts the other's check.
  *
- * Anything that changes the account, saving, applying or moving, waits for the
- * user's yes in a window of this extension. Only when both the server's level
+ * Anything that changes the account, saving, applying, moving, deleting or
+ * switching a filter on or off, waits for the user's yes in a window of this
+ * extension. Only when both the server's level
  * and this extension's own switch for that action allow it does a change go
  * through without the window: the switches are set in the popup, all off by
  * default, so a program that read the connector's secret cannot skip the
@@ -24,18 +25,23 @@
  * for as long as Chrome stays open. Saving and moving do not wait behind it.
  * A write that is tried again first looks whether an earlier try already
  * worked, so a lost answer does not make a second filter.
+ *
+ * What a filter may do beyond filing and flags is the user's to allow, one
+ * action at a time, here in the popup as well as on the server's Permissions
+ * page (Tobi, 06.11.2026). Every check in this extension uses what was allowed
+ * here, never what the server says, so a program that reached the connector
+ * cannot allow anything.
  */
 
 import { defineBackground } from 'wxt/utils/define-background'
 import { browser } from 'wxt/browser'
 import { HOST_NAME, parseRequest, type BrowserRequest, type BrowserResponse, type ProtonFilter } from '../../src/browser/messages.js'
-import { reviewSieve, filterNameProblem, sameScript } from '../../src/filters/sieve.js'
+import { reviewSieve, filterNameProblem, sameScript, parseUnlocks, UNLOCKABLE, type Unlockable } from '../../src/filters/sieve.js'
 import { applyMoves, sameOrder, movedFilters, orderWarnings, OrderError } from '../../src/filters/order.js'
 import type { ApiResult } from '../lib/proton-api.js'
 import {
   parsePageMessage,
-  parseSwitches,
-  NO_SWITCHES,
+  readSwitches,
   PROPOSAL_LIFETIME_MS,
   type Change,
   type ContentOp,
@@ -52,11 +58,14 @@ const MAX_DETAIL = 500
 const MAX_LOGGED_NAME = 200
 
 type Failure = Extract<BrowserResponse, { ok: false }>
+type DoneOutcome = 'added' | 'replaced' | 'applied' | 'reordered' | 'deleted' | 'enabled' | 'disabled'
+/** Every action allowed, for describing what a filter does rather than checking it. */
+const DESCRIBE_ALL: ReadonlySet<Unlockable> = new Set(UNLOCKABLE)
 type HostState = { state: 'starting' | 'connected' | 'error' | 'disconnected'; message?: string; at: number }
 /** A change as kept here: with the account, which is stripped before it leaves. */
 type StoredChange = Change & { account?: string }
 type Submitted =
-  | { status: 'done'; outcome: 'added' | 'replaced' | 'applied' | 'reordered'; filterId?: string; apply?: 'done' | 'queued' | 'failed' }
+  | { status: 'done'; outcome: DoneOutcome; filterId?: string; apply?: 'done' | 'queued' | 'failed' }
   | { status: 'queued' }
   | { status: 'failed'; message: string }
 
@@ -202,27 +211,35 @@ export default defineBackground(() => {
       .map(({ account: _account, ...change }) => change)
   }
 
+  /** What a filter may do beyond filing and flags, as allowed in this extension's popup. Nothing by default. */
+  async function unlocked(): Promise<ReadonlySet<Unlockable>> {
+    const stored = await browser.storage.local.get('unlocks')
+    return new Set(parseUnlocks(stored.unlocks) ?? [])
+  }
+
   /** The rules of sieve.ts once more, here, whatever the server checked. */
-  function refusal(name: string, sieve: string): Failure | undefined {
-    const problems = [filterNameProblem(name), ...reviewSieve(sieve).problems].filter((p): p is string => p !== undefined)
+  function refusal(name: string, sieve: string, unlocks: ReadonlySet<Unlockable>): Failure | undefined {
+    const problems = [filterNameProblem(name), ...reviewSieve(sieve, unlocks).problems].filter((p): p is string => p !== undefined)
     return problems.length > 0 ? failure('refused', problems.join(' ')) : undefined
   }
 
-  /** The same rules for a script that is applied rather than saved, whose name does not change. */
-  function scriptRefusal(sieve: string): Failure | undefined {
-    const problems = reviewSieve(sieve).problems
+  /** The same rules for a script that is applied or switched on rather than saved, whose name does not change. */
+  function scriptRefusal(sieve: string, unlocks: ReadonlySet<Unlockable>): Failure | undefined {
+    const problems = reviewSieve(sieve, unlocks).problems
     return problems.length > 0 ? failure('refused', problems.join(' ')) : undefined
   }
 
   /** A stored filter that does what an assistant may not set up is not replaced by one either. */
-  function protectedFilter(filter: ProtonFilter): Failure | undefined {
-    const review = reviewSieve(filter.sieve)
+  function protectedFilter(filter: ProtonFilter, unlocks: ReadonlySet<Unlockable>): Failure | undefined {
+    const review = reviewSieve(filter.sieve, unlocks)
     if (review.problems.length === 0) return undefined
     return failure(
       'refused',
       `The filter "${filter.name}" ` +
-        (review.refused.length > 0 ? `does ${review.refused.join(', ')}` : 'does not pass the rules a proposal meets') +
-        ". Changing it is left to the user, in Proton's settings.",
+        (review.refused.length > 0
+          ? `does ${review.refused.join(', ')}, which is not allowed in the popup of the extension`
+          : 'does not pass the rules a proposal meets') +
+        ". Otherwise changing it is left to the user, in Proton's settings.",
     )
   }
 
@@ -243,7 +260,7 @@ export default defineBackground(() => {
 
   async function switches(): Promise<Switches> {
     const stored = await browser.storage.local.get('switches')
-    return parseSwitches(stored.switches) ?? NO_SWITCHES
+    return readSwitches(stored.switches)
   }
 
   // The queue
@@ -282,9 +299,11 @@ export default defineBackground(() => {
     if (!tab.ok) return settle(tab)
     const account = entry.account
     const work = entry.work
+    const unlocks = await unlocked()
+    const allowed = [...unlocks]
     switch (work.action) {
       case 'save': {
-        const refused = refusal(work.name, work.sieve)
+        const refused = refusal(work.name, work.sieve, unlocks)
         if (refused) return { status: 'failed', message: refused.message }
         const list = await sortedFilters(tab.id)
         if (!list.ok) return settle(list)
@@ -299,12 +318,12 @@ export default defineBackground(() => {
           if (stored.name !== work.current.name || !sameScript(stored.sieve, work.current.sieve)) {
             return { status: 'failed', message: 'The filter changed since this was agreed to. Ask for a new proposal.' }
           }
-          const guarded = protectedFilter(stored)
+          const guarded = protectedFilter(stored, unlocks)
           if (guarded) return { status: 'failed', message: guarded.message }
           const check = await inTab<string[]>(tab.id, { op: 'check', sieve: work.sieve })
           if (!check.ok) return settle(check)
           if (check.value.length > 0) return { status: 'failed', message: `Proton's check found: ${check.value.join('; ')}` }
-          const updated = await inTab<void>(tab.id, { op: 'update', account, filter: stored, name: work.name, sieve: work.sieve })
+          const updated = await inTab<void>(tab.id, { op: 'update', account, filter: stored, name: work.name, sieve: work.sieve, allowed })
           if (!updated.ok) return settle(updated)
           return { status: 'done', message: 'replaced', filterId: stored.id, ...follow(stored.id) }
         }
@@ -313,7 +332,7 @@ export default defineBackground(() => {
         const check = await inTab<string[]>(tab.id, { op: 'check', sieve: work.sieve })
         if (!check.ok) return settle(check)
         if (check.value.length > 0) return { status: 'failed', message: `Proton's check found: ${check.value.join('; ')}` }
-        const added = await inTab<string>(tab.id, { op: 'add', account, name: work.name, sieve: work.sieve })
+        const added = await inTab<string>(tab.id, { op: 'add', account, name: work.name, sieve: work.sieve, allowed })
         if (!added.ok) return settle(added)
         return {
           status: 'done',
@@ -327,9 +346,9 @@ export default defineBackground(() => {
         if (!sameScript(found.filter.sieve, work.sieve)) {
           return { status: 'failed', message: 'The filter changed since applying it was agreed to. Ask again.' }
         }
-        const refused = scriptRefusal(found.filter.sieve)
+        const refused = scriptRefusal(found.filter.sieve, unlocks)
         if (refused) return { status: 'failed', message: refused.message }
-        const applied = await inTab<void>(tab.id, { op: 'apply', account, filterId: work.filterId, sieve: work.sieve })
+        const applied = await inTab<void>(tab.id, { op: 'apply', account, filterId: work.filterId, sieve: work.sieve, allowed })
         return applied.ok ? { status: 'done', message: 'applied' } : settle(applied)
       }
       case 'reorder': {
@@ -342,6 +361,42 @@ export default defineBackground(() => {
         }
         const ordered = await inTab<void>(tab.id, { op: 'order', account, ids: work.after })
         return ordered.ok ? { status: 'done', message: 'reordered' } : settle(ordered)
+      }
+      case 'delete': {
+        const list = await sortedFilters(tab.id)
+        if (!list.ok) return settle(list)
+        const stored = list.filters.find((filter) => filter.id === work.filterId)
+        // Gone already: an earlier try worked, or someone deleted it meanwhile.
+        if (!stored) return { status: 'done', message: 'deleted' }
+        if (!sameScript(stored.sieve, work.sieve)) {
+          return { status: 'failed', message: 'The filter changed since deleting it was agreed to. Ask again.' }
+        }
+        const deleted = await inTab<void>(tab.id, { op: 'delete', account, filterId: work.filterId, sieve: work.sieve })
+        return deleted.ok ? { status: 'done', message: 'deleted' } : settle(deleted)
+      }
+      case 'status': {
+        const list = await sortedFilters(tab.id)
+        if (!list.ok) return settle(list)
+        const stored = list.filters.find((filter) => filter.id === work.filterId)
+        if (!stored) return { status: 'failed', message: 'The filter does not exist any more.' }
+        const done = work.enabled ? 'enabled' : 'disabled'
+        if (stored.enabled === work.enabled) return { status: 'done', message: done }
+        if (!sameScript(stored.sieve, work.sieve)) {
+          return { status: 'failed', message: 'The filter changed since this was agreed to. Ask again.' }
+        }
+        if (work.enabled) {
+          const refused = scriptRefusal(stored.sieve, unlocks)
+          if (refused) return { status: 'failed', message: refused.message }
+        }
+        const switched = await inTab<void>(tab.id, {
+          op: 'status',
+          account,
+          filterId: work.filterId,
+          enabled: work.enabled,
+          sieve: work.sieve,
+          allowed,
+        })
+        return switched.ok ? { status: 'done', message: done } : settle(switched)
       }
     }
   }
@@ -356,8 +411,8 @@ export default defineBackground(() => {
     work,
   })
 
-  const doneOutcome = (message: string): 'added' | 'replaced' | 'applied' | 'reordered' =>
-    message === 'replaced' || message === 'applied' || message === 'reordered' ? message : 'added'
+  const DONE: ReadonlySet<string> = new Set(['replaced', 'applied', 'reordered', 'deleted', 'enabled', 'disabled'])
+  const doneOutcome = (message: string): DoneOutcome => (DONE.has(message) ? (message as DoneOutcome) : 'added')
 
   /**
    * Runs a write now. An application waits behind one that already waits,
@@ -561,16 +616,25 @@ export default defineBackground(() => {
   async function askToApply(tab: number, account: string, filterId: string): Promise<Failure | undefined> {
     const found = await currentFilter(tab, filterId)
     if (!found.ok) return found
-    const refused = scriptRefusal(found.filter.sieve)
+    const unlocks = await unlocked()
+    const refused = scriptRefusal(found.filter.sieve, unlocks)
     if (refused) return refused
-    const review = reviewSieve(found.filter.sieve)
+    const review = reviewSieve(found.filter.sieve, unlocks)
     return openWindow({
       kind: 'apply',
       id: crypto.randomUUID(),
       account,
       filter: found.filter,
       effects: review.effects,
-      warnings: review.warnings,
+      warnings: [
+        ...review.warnings,
+        ...(review.unlocked.length > 0
+          ? [
+              `On the mail already there it does what it does to new mail: ${review.unlocked.join(', ')}, all at once. ` +
+                'Whether Proton sends an answer or a refusal for mail that arrived long ago is not known here.',
+            ]
+          : []),
+      ],
       createdAt: Date.now(),
     })
   }
@@ -601,7 +665,8 @@ export default defineBackground(() => {
       case 'propose_filter': {
         const { account, proposal, applyAllowed } = request
         const name = proposal.name.trim()
-        const refused = refusal(name, proposal.sieve)
+        const unlocks = await unlocked()
+        const refused = refusal(name, proposal.sieve, unlocks)
         if (refused) return refused
         const tab = await accountTab(account)
         if (!tab.ok) return tab
@@ -609,7 +674,7 @@ export default defineBackground(() => {
         if (proposal.replaces) {
           const found = await currentFilter(tab.id, proposal.replaces)
           if (!found.ok) return found
-          const guarded = protectedFilter(found.filter)
+          const guarded = protectedFilter(found.filter, unlocks)
           if (guarded) return guarded
           current = found.filter
         }
@@ -646,7 +711,7 @@ export default defineBackground(() => {
         if (!check.ok) return asFailure(check)
         if (check.value.length > 0) return failure('proton-error', `Proton's check found: ${check.value.join('; ')}`)
 
-        const review = reviewSieve(proposal.sieve)
+        const review = reviewSieve(proposal.sieve, unlocks)
         const opened = await openWindow({
           kind: 'save',
           id: crypto.randomUUID(),
@@ -670,7 +735,7 @@ export default defineBackground(() => {
         if (!found.ok) return found
         // A filter that discards would delete the existing mail it matches,
         // so only one that passes the rules of a proposal is applied.
-        const refused = scriptRefusal(found.filter.sieve)
+        const refused = scriptRefusal(found.filter.sieve, await unlocked())
         if (refused) return refused
         const confirm = request.confirm || !(await switches()).apply
         if (!confirm) {
@@ -681,6 +746,71 @@ export default defineBackground(() => {
         }
         const opened = await askToApply(tab.id, account, found.filter.id)
         return opened ?? { ok: true, kind: 'apply_filter', outcome: 'shown' }
+      }
+      case 'delete_filter': {
+        const { account, filterId } = request
+        const tab = await accountTab(account)
+        if (!tab.ok) return tab
+        const found = await currentFilter(tab.id, filterId)
+        if (!found.ok) return found
+        const filter = found.filter
+        const confirm = request.confirm || !(await switches()).delete
+        if (!confirm) {
+          const result = await submit({ action: 'delete', name: filter.name, filterId, sieve: filter.sieve }, account, 'without asking')
+          if (result.status === 'queued') return { ok: true, kind: 'delete_filter', outcome: 'queued' }
+          if (result.status === 'failed') return failure('proton-error', result.message)
+          return { ok: true, kind: 'delete_filter', outcome: 'deleted' }
+        }
+        // Everything it does, allowed or not, so the person sees what goes.
+        const review = reviewSieve(filter.sieve, DESCRIBE_ALL)
+        const opened = await openWindow({
+          kind: 'delete',
+          id: crypto.randomUUID(),
+          account,
+          filter,
+          effects: review.effects,
+          warnings: [],
+          createdAt: Date.now(),
+        })
+        return opened ?? { ok: true, kind: 'delete_filter', outcome: 'shown' }
+      }
+      case 'set_filter_status': {
+        const { account, filterId, enabled } = request
+        const tab = await accountTab(account)
+        if (!tab.ok) return tab
+        const found = await currentFilter(tab.id, filterId)
+        if (!found.ok) return found
+        const filter = found.filter
+        if (filter.enabled === enabled) return { ok: true, kind: 'set_filter_status', outcome: 'switched' }
+        const unlocks = await unlocked()
+        // Switching a filter on sets up what it does.
+        if (enabled) {
+          const refused = scriptRefusal(filter.sieve, unlocks)
+          if (refused) return refused
+        }
+        const confirm = request.confirm || !(await switches()).status
+        if (!confirm) {
+          const result = await submit(
+            { action: 'status', name: filter.name, filterId, enabled, sieve: filter.sieve },
+            account,
+            'without asking',
+          )
+          if (result.status === 'queued') return { ok: true, kind: 'set_filter_status', outcome: 'queued' }
+          if (result.status === 'failed') return failure('proton-error', result.message)
+          return { ok: true, kind: 'set_filter_status', outcome: 'switched' }
+        }
+        const review = reviewSieve(filter.sieve, enabled ? unlocks : DESCRIBE_ALL)
+        const opened = await openWindow({
+          kind: 'status',
+          id: crypto.randomUUID(),
+          account,
+          filter,
+          enabled,
+          effects: review.effects,
+          warnings: enabled ? review.warnings : [],
+          createdAt: Date.now(),
+        })
+        return opened ?? { ok: true, kind: 'set_filter_status', outcome: 'shown' }
       }
       case 'reorder_filters': {
         const { account, moves } = request
@@ -777,9 +907,9 @@ export default defineBackground(() => {
     const name =
       pending.kind === 'save'
         ? pending.name
-        : pending.kind === 'apply'
-          ? pending.filter.name
-          : movesName(pending.moved.map((move) => pending.names[move.id] || '(no name)'))
+        : pending.kind === 'reorder'
+          ? movesName(pending.moved.map((move) => pending.names[move.id] || '(no name)'))
+          : pending.filter.name
     if (!accept) {
       await logChange({ at: Date.now(), name, outcome: 'rejected', how: 'confirmed', account: pending.account })
       return { ok: true, message: pending.kind === 'save' ? 'Rejected. Nothing was saved.' : 'Cancelled. Nothing was changed.' }
@@ -804,6 +934,12 @@ export default defineBackground(() => {
       case 'reorder':
         work = { action: 'reorder', name, before: pending.before, after: pending.after }
         break
+      case 'delete':
+        work = { action: 'delete', name, filterId: pending.filter.id, sieve: pending.filter.sieve }
+        break
+      case 'status':
+        work = { action: 'status', name, filterId: pending.filter.id, enabled: pending.enabled, sieve: pending.filter.sieve }
+        break
     }
     const result = await submit(work, pending.account, 'confirmed')
     if (result.status === 'queued') return { ok: true, message: QUEUED_TEXT }
@@ -813,6 +949,12 @@ export default defineBackground(() => {
         return { ok: true, message: APPLIED_TEXT }
       case 'reordered':
         return { ok: true, message: 'Saved. The filters run in the new order from now on.' }
+      case 'deleted':
+        return { ok: true, message: 'Deleted. Proton keeps nothing of the filter.' }
+      case 'enabled':
+        return { ok: true, message: 'Switched on. The filter runs on new mail from now on.' }
+      case 'disabled':
+        return { ok: true, message: 'Switched off. The filter keeps its script and runs on no message.' }
       default: {
         const done = result.outcome === 'replaced' ? 'Saved. The filter is replaced.' : 'Saved. The filter is added and on.'
         if (result.apply === 'done') {
@@ -848,6 +990,10 @@ export default defineBackground(() => {
           if (!fromPopup) return undefined
           await browser.storage.local.set({ switches: message.switches })
           return { ok: true }
+        case 'unlocks':
+          if (!fromPopup) return undefined
+          await browser.storage.local.set({ unlocks: message.actions })
+          return { ok: true }
         case 'reconnect':
           connect()
           void runQueue()
@@ -862,6 +1008,7 @@ export default defineBackground(() => {
             queue: queue.map((entry) => ({ id: entry.id, ...view([entry])[0], lastError: entry.lastError })),
             changes: Array.isArray(local.changes) ? local.changes : [],
             switches: await switches(),
+            unlocks: [...(await unlocked())],
           }
         }
       }

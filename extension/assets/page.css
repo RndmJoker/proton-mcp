@@ -86,6 +86,7 @@ li.moved { font-weight: 600; }
 li button { padding: 2px 10px; margin-left: 6px; font-size: 0.9em; }
 .choice input { width: 18px; height: 18px; margin: 0; }
 .switches .choice { margin: 6px 0; }
+.switches .risk { margin: -4px 0 8px 26px; font-size: 0.9em; }
 .notice { margin: 12px 0 0; font-weight: 600; }
 .state-ok { color: #1f7a3f; }
 .state-bad { color: #b3261e; }

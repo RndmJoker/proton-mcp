@@ -32,6 +32,7 @@
  */
 
 import type { Level, SendLimits, StoredSettings } from './settings.js'
+import { UNLOCKABLE, NO_UNLOCKS, type Unlockable } from './filters/sieve.js'
 
 /** The tools in each group, as they are named to the client. */
 export const GROUPS = {
@@ -56,7 +57,7 @@ export const GROUPS = {
     'delete_saved_attachments',
   ],
   sending: ['send_message', 'send_reply', 'send_forward', 'send_draft'],
-  filters: ['propose_filter', 'apply_filter', 'reorder_filters'],
+  filters: ['propose_filter', 'apply_filter', 'reorder_filters', 'delete_filter', 'set_filter_status'],
 } as const
 
 export type Group = keyof typeof GROUPS
@@ -82,7 +83,16 @@ export function canAsk(tool: string): boolean {
 /** Groups whose tools change something. Read-only mode switches all of them off. */
 const CHANGING: ReadonlySet<Group> = new Set(['filing', 'writing', 'sending', 'filters'])
 
+/**
+ * Tools that are off until the user switches them on: deleting a filter and
+ * switching one on or off. Both were left out of #59 at first, and came in on
+ * Tobi's word of 06.11.2026 that the user decides, with today's behaviour as
+ * the default.
+ */
+const OFF_BY_DEFAULT: ReadonlySet<string> = new Set(['delete_filter', 'set_filter_status'])
+
 export function defaultLevel(tool: string): Level {
+  if (OFF_BY_DEFAULT.has(tool)) return 'off'
   return canAsk(tool) ? 'ask' : 'act'
 }
 
@@ -130,8 +140,8 @@ export function levelsFromEnvironment(env: NodeJS.ProcessEnv = process.env): Map
   const check = (variable: string, level: Level, tool: string, how: string): void => {
     if (level === 'ask' && !canAsk(tool)) {
       throw new PermissionsError(
-        `${variable} names ${how}, and ${tool} cannot ask first: only the sending tools, ` +
-          'propose_filter, apply_filter and reorder_filters can. Use PROTON_MCP_OFF or PROTON_MCP_ACT_ON_ITS_OWN for it.',
+        `${variable} names ${how}, and ${tool} cannot ask first: only the sending tools and the filter ` +
+          'tools that change something can. Use PROTON_MCP_OFF or PROTON_MCP_ACT_ON_ITS_OWN for it.',
       )
     }
   }
@@ -198,6 +208,26 @@ export function limitsFromEnvironment(env: NodeJS.ProcessEnv = process.env): Sen
   return limits
 }
 
+/**
+ * What a filter may do beyond filing and flags, from PROTON_MCP_FILTER_ACTIONS,
+ * or nothing when it is not set. An unknown name stops the start, like an
+ * unknown tool: a typo must not quietly allow less, or more, than was meant.
+ */
+export function unlocksFromEnvironment(env: NodeJS.ProcessEnv = process.env): Unlockable[] | undefined {
+  const raw = env.PROTON_MCP_FILTER_ACTIONS
+  if (raw === undefined || raw.trim() === '') return undefined
+  const named = entries(raw)
+  if (named.length === 1 && named[0] === 'none') return []
+  const unknown = named.find((entry) => !(UNLOCKABLE as readonly string[]).includes(entry))
+  if (unknown) {
+    throw new PermissionsError(
+      `PROTON_MCP_FILTER_ACTIONS names "${unknown}", which is not an action a filter can be allowed. ` +
+        `They are ${UNLOCKABLE.join(', ')}, or none.`,
+    )
+  }
+  return [...new Set(named as Unlockable[])]
+}
+
 /** Whether a recipient address matches an entry of the permitted list. */
 export function permitted(address: string, allowed: readonly string[]): boolean {
   const candidate = address.trim().toLowerCase()
@@ -229,6 +259,7 @@ export type HoldBack = { reason: string } | undefined
 export class Permissions {
   readonly #fromEnv: Map<string, Level>
   readonly #limitsFromEnv: SendLimits
+  readonly #unlocksFromEnv: Unlockable[] | undefined
   readonly #settings: () => StoredSettings
   readonly #readOnly: boolean
   readonly #clock: () => number
@@ -239,6 +270,7 @@ export class Permissions {
     const env = options.env ?? process.env
     this.#fromEnv = levelsFromEnvironment(env)
     this.#limitsFromEnv = limitsFromEnvironment(env)
+    this.#unlocksFromEnv = unlocksFromEnvironment(env)
     this.#settings = options.settings
     this.#readOnly = options.readOnly
     this.#clock = options.clock ?? Date.now
@@ -291,6 +323,29 @@ export class Permissions {
       maxPerHour: this.#limitsFromEnv.maxPerHour !== undefined,
       until: this.#limitsFromEnv.until !== undefined,
     }
+  }
+
+  /**
+   * What a filter may do beyond filing and flags: from the environment when
+   * set there, else from the interface. Nothing by default. The extension has
+   * the same switches in its popup, and an action needs both.
+   */
+  unlocks(): ReadonlySet<Unlockable> {
+    if (this.#readOnly) return NO_UNLOCKS
+    const chosen = this.#unlocksFromEnv ?? this.#settings().filterActions ?? []
+    return new Set(UNLOCKABLE.filter((action) => chosen.includes(action)))
+  }
+
+  /** Whether the environment fixed what filters may do, so the interface shows it as fixed. */
+  unlocksFixed(): boolean {
+    return this.#unlocksFromEnv !== undefined
+  }
+
+  /** Where to change what filters may do, for answers that refuse. */
+  unlocksWhere(): string {
+    return this.#unlocksFromEnv !== undefined
+      ? 'set in the environment of this server (PROTON_MCP_FILTER_ACTIONS)'
+      : 'on the Permissions page of the local interface'
   }
 
   /** Every tool whose level departs from the default, for the status line and the overview. */

@@ -104,9 +104,10 @@ export function movedFilters(before: readonly string[], after: readonly string[]
 }
 
 /**
- * Where a move touches a filter that does something an assistant may not set
- * up, such as filing into Trash: the order decides which folder wins, so the
- * person agreeing should look twice there. One line per such filter and move.
+ * Where a move touches a filter that does more than file and flag, such as
+ * filing into Trash, whether the user allowed it or not: the order decides
+ * which folder wins and what still runs after a stop, so the person agreeing
+ * should look twice there. One line per such filter and move.
  */
 export function orderWarnings(
   moved: readonly MovedFilter[],
@@ -119,7 +120,7 @@ export function orderWarnings(
       const refused = refusedOf(other)
       if (refused.length === 0) continue
       const warning =
-        `"${nameOf(other)}" does what an assistant may not set up (${refused.join(', ')}), ` +
+        `"${nameOf(other)}" does more than file and flag (${refused.join(', ')}), ` +
         `and its place relative to "${nameOf(move.id)}" changes.`
       if (!warnings.includes(warning)) warnings.push(warning)
     }

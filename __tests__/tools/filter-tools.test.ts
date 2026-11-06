@@ -325,7 +325,7 @@ describe('get_filters', () => {
 
   it('says which of the user filters an assistant can read but not touch', () => {
     const answer = formatFull(filters, ['t=='])
-    expect(answer).toContain('Also: filing into Trash. An assistant can read this filter, but not change or apply it.')
+    expect(answer).toContain('Also: filing into Trash. An assistant can read this filter, but not change or apply it unless the user allows that.')
   })
 
   it('keeps a script inside its block', () => {
@@ -353,7 +353,7 @@ describe('reorder_filters', () => {
     const answer = text(await register().get('reorder_filters')!({ moves: [{ id: 'c==', position: 1 }] }, {}))
     expect(sent[1]).toEqual({ kind: 'reorder_filters', account: ACCOUNT, moves: [{ id: 'c==', position: 1 }], confirm: true })
     expect(answer).toContain('"C" from 3 to 1, now running before "A", "B"')
-    expect(answer).toContain('"B" does what an assistant may not set up (filing into Trash)')
+    expect(answer).toContain('"B" does more than file and flag (filing into Trash)')
   })
 
   it('refuses a move it cannot make, without asking the extension to change anything', async () => {
@@ -402,5 +402,125 @@ describe('waiting for Proton', () => {
     reply = () => ({ ok: true, kind: 'propose_filter', outcome: 'queued' })
     const result = await register().get('propose_filter')!({ name: 'Travel', sieve: SCRIPT }, {})
     expect(text(result)).toContain('Not saved yet')
+  })
+})
+
+describe('what the user allowed beyond filing and flags (06.11.2026)', () => {
+  const DISCARDS = SCRIPT.replace('fileinto "Travel";', 'discard;')
+
+  it('keeps a filter that deletes here unless the user allowed it, and says where', async () => {
+    const refused = await register().get('propose_filter')!({ name: 'Gone', sieve: DISCARDS }, {})
+    expect(refused.isError).toBe(true)
+    expect(text(refused)).toContain('discard is refused')
+    expect(text(refused)).toContain('on the Permissions page of the local interface and in the popup of the browser extension')
+    expect(sent).toEqual([])
+
+    settings = { filterActions: ['discard'] }
+    const shown = await register().get('propose_filter')!({ name: 'Gone', sieve: DISCARDS }, {})
+    expect(sent[0]).toMatchObject({ kind: 'propose_filter', proposal: { sieve: DISCARDS } })
+    expect(text(shown)).toContain('deletes it at once and for good')
+  })
+
+  it('replaces a filter that deletes once deleting is allowed', async () => {
+    settings = { filterActions: ['discard'] }
+    reply = (request) =>
+      request.kind === 'list_filters'
+        ? { ok: true, kind: 'list_filters', filters: [{ id: 'd==', name: 'Gone', enabled: true, order: 1, version: 2, sieve: DISCARDS }] }
+        : { ok: true, kind: 'propose_filter', outcome: 'shown' }
+    await register().get('propose_filter')!({ name: 'Gone', sieve: SCRIPT, replaces: 'd==' }, {})
+    expect(sent.map((request) => request.kind)).toEqual(['list_filters', 'propose_filter'])
+  })
+
+  it('says in list_filters what a proposal may do right now', async () => {
+    reply = () => ({ ok: true, kind: 'list_filters', filters: [] })
+    expect(text(await register().get('list_filters')!({}, {}))).toContain('the user has allowed nothing more')
+    settings = { filterActions: ['trash', 'stop'] }
+    expect(text(await register().get('list_filters')!({}, {}))).toContain(
+      'as the user allowed also: move mail to trash or spam, stop the later filters',
+    )
+  })
+})
+
+describe('delete_filter (06.11.2026)', () => {
+  const stored: BrowserResponse = {
+    ok: true,
+    kind: 'list_filters',
+    filters: [{ id: 'f1==', name: 'Travel', enabled: true, order: 1, version: 2, sieve: SCRIPT }],
+  }
+
+  it('is off until the user switches it on, and asks the extension nothing', async () => {
+    const result = await register().get('delete_filter')!({ id: 'f1==' }, {})
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('delete_filter is switched off')
+    expect(sent).toEqual([])
+  })
+
+  it('asks in the window of the extension, and keeps the whole script in the answer', async () => {
+    settings = { levels: { delete_filter: 'ask' } }
+    reply = (request) => (request.kind === 'list_filters' ? stored : { ok: true, kind: 'delete_filter', outcome: 'shown' })
+    const result = await register().get('delete_filter')!({ id: 'f1==' }, {})
+    expect(sent[1]).toEqual({ kind: 'delete_filter', account: ACCOUNT, filterId: 'f1==', confirm: true })
+    expect(text(result)).toContain('cannot be brought back')
+    expect(text(result)).toContain('```sieve\n')
+    expect(text(result)).toContain('fileinto "Travel"')
+  })
+
+  it('deletes without asking only when the user allowed that, and says so', async () => {
+    settings = { levels: { delete_filter: 'act' } }
+    reply = (request) => (request.kind === 'list_filters' ? stored : { ok: true, kind: 'delete_filter', outcome: 'deleted' })
+    const result = await register().get('delete_filter')!({ id: 'f1==' }, {})
+    expect(sent[1]).toMatchObject({ confirm: false })
+    expect(text(result)).toContain('Deleted without asking')
+    expect(text(result)).toContain('Permissions page')
+  })
+
+  it('names an id it does not know', async () => {
+    settings = { levels: { delete_filter: 'ask' } }
+    reply = () => stored
+    expect(text(await register().get('delete_filter')!({ id: 'zz==' }, {}))).toContain('There is no filter with this id')
+    expect(sent.map((request) => request.kind)).toEqual(['list_filters'])
+  })
+})
+
+describe('set_filter_status (06.11.2026)', () => {
+  const filters = (sieve: string, enabled: boolean): BrowserResponse => ({
+    ok: true,
+    kind: 'list_filters',
+    filters: [{ id: 'f1==', name: 'Travel', enabled, order: 1, version: 2, sieve }],
+  })
+
+  it('is off until the user switches it on', async () => {
+    const result = await register().get('set_filter_status')!({ id: 'f1==', enabled: false }, {})
+    expect(text(result)).toContain('set_filter_status is switched off')
+    expect(sent).toEqual([])
+  })
+
+  it('changes nothing for a filter already in that state', async () => {
+    settings = { levels: { set_filter_status: 'ask' } }
+    reply = () => filters(SCRIPT, true)
+    expect(text(await register().get('set_filter_status')!({ id: 'f1==', enabled: true }, {}))).toContain('already on')
+    expect(sent.map((request) => request.kind)).toEqual(['list_filters'])
+  })
+
+  it('switches off any filter, but on only one that passes the rules with what is allowed', async () => {
+    settings = { levels: { set_filter_status: 'ask' } }
+    const trash = SCRIPT.replace('"Travel"', '"Trash"')
+    reply = (request) => (request.kind === 'list_filters' ? filters(trash, false) : { ok: true, kind: 'set_filter_status', outcome: 'shown' })
+    const refused = await register().get('set_filter_status')!({ id: 'f1==', enabled: true }, {})
+    expect(refused.isError).toBe(true)
+    expect(text(refused)).toContain('cannot be switched on by an assistant')
+    expect(sent.map((request) => request.kind)).toEqual(['list_filters'])
+
+    settings = { levels: { set_filter_status: 'ask' }, filterActions: ['trash'] }
+    sent = []
+    const shown = await register().get('set_filter_status')!({ id: 'f1==', enabled: true }, {})
+    expect(sent[1]).toEqual({ kind: 'set_filter_status', account: ACCOUNT, filterId: 'f1==', enabled: true, confirm: true })
+    expect(text(shown)).toContain('Switching the filter "Travel" on is shown to the user')
+
+    reply = (request) => (request.kind === 'list_filters' ? filters(trash, true) : { ok: true, kind: 'set_filter_status', outcome: 'shown' })
+    settings = { levels: { set_filter_status: 'ask' } }
+    sent = []
+    await register().get('set_filter_status')!({ id: 'f1==', enabled: false }, {})
+    expect(sent[1]).toMatchObject({ kind: 'set_filter_status', enabled: false })
   })
 })

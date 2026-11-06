@@ -174,7 +174,7 @@ describe('anything else on the socket', () => {
     const nonce = client.lines[0]!.nonce as string
     client.send({ type: 'auth', proof: proof(Buffer.from(SECRET, 'hex'), 'client', nonce), nonce: newNonce() })
     await client.settle()
-    client.send({ type: 'request', id: 'x1', body: { kind: 'delete_filter', id: 'abc' } })
+    client.send({ type: 'request', id: 'x1', body: { kind: 'set_forwarding', address: 'someone@example.org' } })
     client.send({ type: 'request', id: 'x2', body: { kind: 'status', also: 'this' } })
     await client.settle()
     expect(client.lines.filter((line) => line.type === 'response').map((line) => (line.body as { error: string }).error)).toEqual([
