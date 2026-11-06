@@ -89,6 +89,8 @@ function fakeProton() {
     reached: undefined as (() => void) | undefined,
     /** When set, the next addition goes through, but its answer is lost. */
     loseAnswer: false,
+    /** When set, the page script deletes without checking, so the background's own check stands alone. */
+    trustingPage: false,
     next: 1,
   }
   const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status })
@@ -153,7 +155,9 @@ function fakeProton() {
   // As in the page: the message is read again, then handled.
   const handle = async (raw: unknown): Promise<unknown> => {
     const op = parseContentOp(structuredClone(raw))
-    return op ? runContentOp(api, op) : undefined
+    if (!op) return undefined
+    if (model.trustingPage && op.op === 'delete') return api.delete(op.filterId)
+    return runContentOp(api, op)
   }
   return { model, handle }
 }
@@ -594,6 +598,19 @@ describe('deleting and switching (06.11.2026)', () => {
     expect(await fromPage('confirm', { type: 'decide', id, accept: true }, tab)).toMatchObject({
       ok: false,
       message: expect.stringContaining('changed since'),
+    })
+    expect(proton.model.filters).toHaveLength(2)
+  })
+
+  it('checks in the background as well whether the filter changed since the yes', async () => {
+    // Each layer on its own: here the page script checks nothing.
+    proton.model.trustingPage = true
+    await remove('f1==')
+    proton.model.filters[0]!.Sieve = OTHER
+    const { id, tab } = windows[0]!
+    expect(await fromPage('confirm', { type: 'decide', id, accept: true }, tab)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('deleting it was agreed to'),
     })
     expect(proton.model.filters).toHaveLength(2)
   })

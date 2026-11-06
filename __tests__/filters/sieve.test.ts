@@ -449,6 +449,11 @@ describe('what the user can allow, one action at a time (Tobi, 06.11.2026)', () 
     expect(reject(`Write to boss@ex${cp(0x430)}mple.com`).problems.join('\n')).toContain('plain ASCII')
   })
 
+  it('takes no line break in what goes to a sender, as in every other string', () => {
+    const source = withExtensions('"reject"', 'if true { reject text:\nGo away.\n.\n; }')
+    expect(reviewSieve(source, allow('reject')).problems.join('\n')).toContain('more than one line')
+  })
+
   it('reads the tags of vacation, and refuses the ones Proton does not document', () => {
     const vacation = (args: string) => reviewSieve(withExtensions('"vacation"', `if true { vacation ${args}; }`), allow('vacation'))
     expect(vacation(':days 7 :subject "Away" "Back on Monday."').effects).toEqual([
