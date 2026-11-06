@@ -259,3 +259,22 @@ describe('the copy of everything sent (#18)', () => {
     expect(body).toContain('archive@example.com (Bcc)')
   })
 })
+
+describe('the cost of the filter tools acting on their own (#59)', () => {
+  it('is stated in its own words, not as the cost of sending', async () => {
+    tools = [
+      { tool: 'send_message', group: 'sending', level: 'ask', options: ['off', 'ask', 'act'], fixed: false, source: 'the default' },
+      { tool: 'apply_filter', group: 'filters', level: 'act', options: ['off', 'ask', 'act'], fixed: false, source: 'set on the Permissions page' },
+    ]
+    const { body } = await send('/permissions')
+    expect(body).toContain('apply_filter acts without asking.')
+    expect(body).toContain('A single message can then ask for a rule')
+    expect(body).toContain('changes the mail that is already there')
+    expect(body).not.toContain('your mailbox to be forwarded')
+  })
+
+  it('names the window of the extension as where the filter tools ask', async () => {
+    const { body } = await send('/permissions')
+    expect(body.replace(/\s+/g, ' ')).toContain('the filter tools in a window of the browser extension')
+  })
+})

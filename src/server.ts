@@ -59,6 +59,7 @@ import { setHandshakeCapabilities } from './tools/capabilities.js'
 import { registerGuidance, INSTRUCTIONS } from './tools/guidance.js'
 import { registerUpdateTool } from './tools/updates.js'
 import { registerFilterTool } from './tools/filters.js'
+import { registerBrowserFilterTools } from './tools/filter-tools.js'
 import { waitForIdle } from './in-flight.js'
 
 // The version number lives in package.json only.
@@ -641,6 +642,12 @@ async function main(): Promise<void> {
     // Handed nothing but the server: it answers filter requests without
     // touching the Bridge, so there is no connection it could use.
     registerFilterTool(server)
+    // Through the browser extension (#59). The account is the one signed in
+    // here, so the extension can refuse a Proton page of another account.
+    registerBrowserFilterTools(server, {
+      getCredentials: () => session.credentials(),
+      permissions,
+    })
     registerListFolders(server, connection)
     registerMessageTools(server, connection)
     registerSavedAttachmentTools(server, connection, saved)
@@ -728,4 +735,12 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown())
 }
 
-void main()
+// One more thing the same command does, so that nobody has to install a second
+// package: setting up the helper Chrome starts for the browser extension (#59).
+// Everything else is the server.
+if (process.argv[2] === 'setup-browser') {
+  const { setupBrowser } = await import('./browser/setup.js')
+  process.exit(setupBrowser({ remove: process.argv.includes('--remove') }))
+} else {
+  void main()
+}

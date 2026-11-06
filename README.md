@@ -43,7 +43,12 @@ This server therefore runs on your machine as well, started by the AI client as 
 | `send_draft` | Sends a draft that is already written, exactly as it was stored |
 | `open_configuration` | Hands back the address of the local web interface, the same for every running server |
 | `check_for_updates` | Asks npm whether a newer version exists. The only thing here that contacts anything but your own machine, and only when called |
-| `manage_filters` | Reads and changes nothing. Filters are out of this server's reach, so it answers with the way through Proton's own settings page, where you agree to each change |
+| `list_filters` | The names of your Proton Mail filters in the order Proton runs them, read through the browser extension [Proton MCP Helper](#the-browser-extension-for-filters). Also what waits in the extension and its last changes |
+| `get_filters` | One or several filters in full: what each does to matching mail and its whole Sieve script |
+| `propose_filter` | A new filter, or a new version of one, as a Sieve script. You agree in a window of the extension, which shows the whole script and, for a change, what changes |
+| `apply_filter` | Runs a saved filter over the mail already there, after you agree in the same kind of window. On a large mailbox Proton takes hours for that |
+| `reorder_filters` | Moves filters in the order Proton runs them, after you agree to the new order |
+| `manage_filters` | Reads and changes nothing. Explains the way through Proton's own settings page, for when the extension is not there |
 
 Every tool that composes a message takes either `text` or `html`, never both: Proton drops the plain text half of a message that carries markup, so the half you confirmed would be the half that never arrived.
 
@@ -89,7 +94,7 @@ These limits come from the Bridge itself and cannot be worked around:
 
 - **No calendar, no contacts.** Neither flows through the Bridge.
 - **No Proton-specific features.** No message expiration, no password-protected messages to outside recipients.
-- **No access to filters, forwarding rules or account settings.** This is also a deliberate security boundary, see below. An assistant asked about filters gets `manage_filters`, which says so and explains the way through Proton's own settings page.
+- **No forwarding rules and no account settings.** This is also a deliberate security boundary, see below. Filters are within reach through the [browser extension](#filters-through-the-browser-extension), but deleting or switching one off, and any filter that deletes, rejects, answers or forwards mail, stay with you in Proton's settings.
 - **No server-side threading or sorting.** The Bridge supports neither `THREAD` nor `SORT`, so ordering happens in this server, which costs one date read per message before a page can be cut out.
 - **No permanent deletion.** Deleted will mean moved to trash, on purpose.
 
@@ -266,6 +271,24 @@ The `sleep` keeps the input open while the answer is on its way. A client signal
 
 You should see your system mailboxes. If instead you get a message saying the Bridge is probably not running, start and unlock the Bridge and try again. The server explains what to do in its error messages rather than printing error codes.
 
+### The browser extension for filters
+
+Optional. Proton keeps filters behind an interface it has not opened to other programs, and the Bridge does not carry them. The extension **Proton MCP Helper** does the work inside the Proton page you are signed in to in Chrome, and a small connector program, which Chrome starts for it, carries the requests between this server and the extension. This server never holds a Proton session or password for it.
+
+1. Set up the connector, once per computer:
+
+   ```bash
+   npx -y @rndmjoker/proton-mcp@latest setup-browser
+   ```
+
+   It writes a secret only you can read, a copy of the connector and a launcher under `~/.config/proton-mcp/browser/`, and the file that tells Chrome which program the extension may start. It prints what it wrote. Run it again after Node moved, for example to another version under another path.
+2. Load the extension: unpack the zip attached to the release, open `chrome://extensions`, switch on Developer mode, choose **Load unpacked** and pick the unpacked folder. Its id has to be `nfmconelbflppeoolebhcckbmffiokkd`.
+3. Reload any open Proton tab once, or open `https://mail.proton.me` and sign in.
+
+The extension's popup says whether the connector runs and what waits; when it does not run, it says why. It also holds the extension's own switches for saving, applying and moving without its window, all off by default, see [Filters, through the browser extension](#filters-through-the-browser-extension). When the extension cannot be reached, the filter tools say so as well, with the cause where it can be told: no setup, Chrome not running, the extension missing or switched off. To take the connector away again, run the same command with `--remove`, and remove the extension in `chrome://extensions`.
+
+Chrome first. Measured on Linux; the setup for macOS and Windows is written but not measured yet. One Chrome profile at a time can serve the server.
+
 ## Security
 
 The content of someone else's email is text written by strangers, and it is handed to a language model that can call tools. A crafted message may try to instruct the assistant. This server assumes that will happen:
@@ -334,12 +357,12 @@ Every tool that can be switched has a level, chosen on the Permissions page of t
 | Level | What the tool does |
 | :--- | :--- |
 | `off` | Is taken away from the assistant entirely. It disappears from the list your client sees, and a call that arrives anyway is refused |
-| `ask first` | Runs only after you agree through your client. Every sending tool does this by default, and only the sending tools can |
+| `ask first` | Runs only after you agree: the sending tools ask through your client, the filter tools that change something in a window of the browser extension. These do it by default, and only these can |
 | `act on its own` | Runs without asking. Every other tool does this by default |
 
 **Nothing changes on an upgrade:** the defaults are the behaviour before levels existed. `open_configuration` and `check_for_updates` are always there and have no level.
 
-In the environment, three lists take tool names or the groups `reading`, `filing`, `writing` and `sending`. A tool named on its own wins over its group, and anything contradictory or unknown stops the server at start rather than letting it run with permissions nobody chose:
+In the environment, three lists take tool names or the groups `reading`, `filing`, `writing`, `sending` and `filters`. A tool named on its own wins over its group, and anything contradictory or unknown stops the server at start rather than letting it run with permissions nobody chose:
 
 ```
 PROTON_MCP_OFF=trash_messages,send_forward
@@ -375,6 +398,19 @@ PROTON_MCP_COPY_AS=bcc
 
 A field that quietly adds a recipient to every message is what an attacker would most like to set. So the overview shows it whenever it is on, and once a PIN is set, only someone who knows the PIN can change it.
 
+### Filters, through the browser extension
+
+What an assistant can do with filters, and what keeps that in bounds. Each point is held in this server and again in the extension; neither trusts the other's check.
+
+- **Only rules that file and flag.** A proposed script has to start with Proton's spam guard, exactly as Proton writes it, and may file into folders and labels and set or clear the read and star flags. Refused: `discard`, `expire`, `reject`, `vacation`, `redirect`, `stop`, filing into Trash or Spam, anything this check does not know, and invisible characters that could make a script read differently from what it does. Refused as well, because each could make the script you read differ from the one that runs: comments other than Proton's own two, the line above the spam guard and the one its filter editor writes above each rule, `text:` blocks and line breaks inside a string, `:regex` and Proton's own `eval` extension, a folder that only looks unlike Trash or Spam (other letter case, a lookalike letter, a path such as `Archive/Trash`, a bare number), and a folder named by a variable. Deleting and switching off filters is not offered at all.
+- **You agree in a window of the extension**, by default, before anything is saved, applied or moved. It shows the account, what the filter does to matching mail, the whole script, and for a change the difference to the stored version; for a move, the new order and a warning where a filter that does something an assistant may not set up changes place. Each window answers only in the tab it was opened in, and only once. Its buttons are locked for a moment and a half whenever it opens or comes to the front, and the one that refuses comes first, so a click meant for another window or a stray Enter does not agree.
+- **Acting without the window takes two switches.** The tool's level on the Permissions page, like the sending tools, and the extension's own switch for that action in its popup. The extension's switches are off by default, and then it shows its window whatever the server sends.
+- **A browser tool an assistant drives cannot reach that window.** Measured with Claude in Chrome: the window is not among its tabs; on a web page there is no way to message the extension; a jump to the window's address from a web page ends on `chrome-extension://invalid/`; reading, finding and screenshots on an extension page fail.
+- **Orders only from this server.** The extension declares no `externally_connectable`, so no web page can send it anything, and its script in the Proton page listens to the extension alone. The connector accepts connections only on a socket file in a directory only you can open, and only after the connection proves it knows the secret from the setup; the connector proves the same back. Every message is checked against a fixed list of five kinds. Measured: a connection without the secret is cut off at its first request, and nothing reaches the extension. The limit: a program running as you can read the secret. It then meets the window like the server does, unless you turned on the extension's switches.
+- **The right account.** Before anything is read or changed, the extension checks that the Proton page belongs to the account this server is signed in to, and once more right before each change.
+- **What you agreed to, and nothing that changed since.** A change runs only while the filter, or the order, is still as it was when you agreed. A filter that does something an assistant may not set up is neither replaced nor applied by one. A change tried again after a lost answer first looks whether the first try already worked, so it does not save a filter twice.
+- **Applying takes time.** Proton runs a filter over the existing mail in the background, which on a large mailbox takes hours, and applies no other filter meanwhile. An application you agreed to then waits in the extension, tried again at growing intervals of up to fifteen minutes, for as long as Chrome stays open; saving and moving go through meanwhile. The popup shows what waits and can cancel it, except while it is being tried. Restarting Chrome or the extension drops what waits, and the popup notes each one.
+
 ### What lands on your disk
 
 Only these, all under `~/.config/proton-mcp/` (on Windows `%USERPROFILE%\.config\proton-mcp\`) and all written readable by your account alone:
@@ -387,8 +423,13 @@ Only these, all under `~/.config/proton-mcp/` (on Windows `%USERPROFILE%\.config
 | `credentials.enc` | Only if you chose the encrypted file | Your Bridge password, encrypted with your master password |
 | `env` | Only if you chose the plain file, or put it there yourself | Your Bridge password in plain text |
 | `saved-attachments/` | While attachments are saved | Which files this server saved, so it can delete exactly those again. No content |
+| `browser/secret` | When you run `setup-browser` | The random secret the server and the connector prove to each other |
+| `browser/host/` | When you run `setup-browser` | A copy of the connector and the launcher Chrome starts |
+| `run/browser.sock` | While Chrome runs the connector | The socket the server reaches the connector through. Where the home path is too long for a socket, under `/tmp/proton-mcp-<your user id>/` instead; on Windows a named pipe |
 
 Choosing the system keyring puts the password where the operating system keeps your other passwords, and nothing of it in a file. Choosing "this session only" writes nothing at all.
+
+`setup-browser` also writes the file that tells Chrome which program the extension may start, where Chrome looks for it: `~/.config/google-chrome/NativeMessagingHosts/com.rndmjoker.proton_mcp.json` on Linux, the same name under `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/` on macOS, and on Windows in `browser/` above, named in a registry key under `HKEY_CURRENT_USER`. The extension keeps its switches, its last fifty changes with the filter names, and what waits for Proton, with the script, in its own storage in your Chrome profile; what waits is gone once it ran, was cancelled or Chrome restarted. A proposal waiting for your decision is kept in memory only.
 
 **No mail, no subjects, no sender addresses, no folder names, no search terms.** The activity list in the interface records tool names and timings, in memory only, and is gone when the server stops.
 
@@ -489,7 +530,9 @@ The tests run without a Bridge, so they work in CI. Real credentials and real ma
 ```
 src/
 ├── bridge/       connection handling, certificate pinning, error translation
+├── browser/      the channel to the browser extension: connector, socket, setup
 ├── credentials/  the four places a password can be kept, and the runtime probe
+├── filters/      the check every proposed Sieve script passes, and moving filters
 ├── mail/         listing, reading, searching, identifiers, attachments
 ├── mime/         parsing, HTML to text, budgeting, the parts of a stored draft
 ├── tools/        the MCP tools and their output formatting
@@ -500,19 +543,23 @@ src/
 ├── session.ts    whether we are signed in, and where from
 ├── settings.ts   the Bridge ports, when changed in the interface
 └── server.ts     entry point and transport
+extension/        the browser extension Proton MCP Helper, built with WXT, not in the npm package
 ```
 
 The web interface has one property worth knowing before touching it: `Referrer-Policy` must not be `no-referrer`. Under that policy browsers send `Origin: null`, which the CSRF defence rightly refuses, and the interface then refuses its own forms. The tests set the Origin header themselves and cannot catch it. There is a comment in `src/web/security.ts` and a test asserting the cause.
 
 ### Checks before a pull request
 
-The CI in `.github/workflows/ci.yml` runs the tests, the type check, the build, an audit of the dependencies and a scan for accidentally committed secrets. All of it runs locally too:
+The CI in `.github/workflows/ci.yml` runs the tests, the type check, the build, an audit of the dependencies and a scan for accidentally committed secrets, and type checks and builds the extension. All of it runs locally too:
 
 ```bash
+npm ci --prefix extension             # once: the extension's own dependencies, which its tests need
 npm test
 npm run typecheck
 npm run build
 npm audit --omit=dev
+npm run typecheck --prefix extension
+npm run build --prefix extension
 ```
 
 ### Measured behaviour of the Bridge

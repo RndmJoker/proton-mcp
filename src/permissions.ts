@@ -44,6 +44,7 @@ export const GROUPS = {
     'list_drafts',
     'manage_filters',
     'list_filters',
+    'get_filters',
   ],
   filing: ['add_label', 'remove_label', 'move_messages', 'set_flags', 'trash_messages'],
   writing: [
@@ -55,7 +56,7 @@ export const GROUPS = {
     'delete_saved_attachments',
   ],
   sending: ['send_message', 'send_reply', 'send_forward', 'send_draft'],
-  filters: ['propose_filter'],
+  filters: ['propose_filter', 'apply_filter', 'reorder_filters'],
 } as const
 
 export type Group = keyof typeof GROUPS
@@ -129,8 +130,8 @@ export function levelsFromEnvironment(env: NodeJS.ProcessEnv = process.env): Map
   const check = (variable: string, level: Level, tool: string, how: string): void => {
     if (level === 'ask' && !canAsk(tool)) {
       throw new PermissionsError(
-        `${variable} names ${how}, and ${tool} cannot ask first: only the sending tools and ` +
-          'propose_filter can. Use PROTON_MCP_OFF or PROTON_MCP_ACT_ON_ITS_OWN for it.',
+        `${variable} names ${how}, and ${tool} cannot ask first: only the sending tools, ` +
+          'propose_filter, apply_filter and reorder_filters can. Use PROTON_MCP_OFF or PROTON_MCP_ACT_ON_ITS_OWN for it.',
       )
     }
   }

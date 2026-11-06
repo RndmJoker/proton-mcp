@@ -22,11 +22,19 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            extension/package-lock.json
 
       # ci rather than install: it installs exactly what the lockfile says and
       # fails if the lockfile and package.json disagree.
       - name: Install dependencies
         run: npm ci
+
+      # The browser extension (#59) has dependencies of its own. The tests
+      # run its background, and it is type checked and built like the server.
+      - name: Install the extension's dependencies
+        run: npm ci --prefix extension
 
       # Two configurations, and the second is the point of the first being
       # incomplete for a year: tsconfig.json excludes __tests__ so a build
@@ -43,6 +51,12 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Type check the extension
+        run: npm run typecheck --prefix extension
+
+      - name: Build the extension
+        run: npm run build --prefix extension
 
   audit:
     name: Audit

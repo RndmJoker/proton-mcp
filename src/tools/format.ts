@@ -76,9 +76,10 @@ function markers(): { begin: string; end: string; label: string } {
  * message here, and an escaped break still says exactly what was there, while
  * a removed one would quietly change the subject a person is shown.
  */
-function oneLine(value: string): string {
-  // eslint-disable-next-line no-control-regex
-  return value.replace(/\r\n|\r|\n/g, '\\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '?')
+export function oneLine(value: string): string {
+  // Line and paragraph separators break a line just as well in many places,
+  // and C1 controls such as NEL do in some. Found in the review of 06.11.2026.
+  return value.replace(/\r\n|\r|\n/g, '\\n').replace(/[^\P{Cc}\t]|[\p{Zl}\p{Zp}]/gu, '?')
 }
 
 export function formatAddress(a: Address): string {

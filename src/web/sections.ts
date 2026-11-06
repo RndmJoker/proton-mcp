@@ -509,13 +509,23 @@ function levelTable(data: PermissionsData): string {
   const autonomous = data.tools.filter(
     (tool) => tool.level === 'act' && tool.options.includes('ask'),
   )
-  const cost = autonomous.length
-    ? `<div class="error"><strong>${autonomous.map((t) => escapeHtml(t.tool)).join(', ')}
-${autonomous.length === 1 ? 'acts' : 'act'} without asking.</strong> Your private mail, text written by
+  const sending = autonomous.filter((tool) => tool.group !== 'filters')
+  const filters = autonomous.filter((tool) => tool.group === 'filters')
+  const names = (tools: ToolLevelView[]): string =>
+    `${tools.map((t) => escapeHtml(t.tool)).join(', ')} ${tools.length === 1 ? 'acts' : 'act'} without asking.`
+  const noPin = data.pinRequired ? '' : '<br><strong>No PIN is set</strong>, so the assistant could also have switched this on itself.'
+  const cost =
+    (sending.length
+      ? `<div class="error"><strong>${names(sending)}</strong> Your private mail, text written by
 strangers and a way out are then together with no person in between: a single message can ask for
-your mailbox to be forwarded, and nobody would see it happen. Bound it below where you can.
-${data.pinRequired ? '' : '<br><strong>No PIN is set</strong>, so the assistant could also have switched this on itself.'}</div>`
-    : ''
+your mailbox to be forwarded, and nobody would see it happen. Bound it below where you can.${noPin}</div>`
+      : '') +
+    (filters.length
+      ? `<div class="error"><strong>${names(filters)}</strong> A single message can then ask for a rule
+that files mail away from you or marks it as read, and the rule keeps acting long after the conversation.
+Applying one changes the mail that is already there, all of it at once. Deleting, rejecting, answering and
+forwarding stay refused either way, and the extension lists every change in its popup.${noPin}</div>`
+      : '')
 
   return `<h2>What the assistant may do</h2>
 <div class="card">
@@ -527,8 +537,8 @@ ${cost}
   ${rows}
   </table>
   <p class="hint"><strong>off</strong> takes a tool away from the assistant entirely.
-  <strong>ask first</strong> makes it ask you through your client before acting, which every sending
-  tool does by default. <strong>act on its own</strong> lets it go ahead. A level set in the server's
+  <strong>ask first</strong> makes it ask you before acting: the sending tools through your client, the
+  filter tools in a window of the browser extension. Both do this by default. <strong>act on its own</strong> lets it go ahead. A level set in the server's
   environment wins over this page and is shown here as fixed.</p>
   ${pinField(data.pinRequired === true)}
   <button type="submit">Save the levels</button>
