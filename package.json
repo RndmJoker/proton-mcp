@@ -1,6 +1,6 @@
 {
   "name": "@rndmjoker/proton-mcp",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "MCP server for Proton Mail over the local Proton Mail Bridge, with a web interface for setup. Largely AI-generated with Anthropic's Claude Opus models.",
   "type": "module",
   "license": "MIT",
