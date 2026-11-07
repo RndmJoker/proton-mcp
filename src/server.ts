@@ -36,7 +36,7 @@ import { loadPinned, pinPath } from './bridge/certificate.js'
 import { Session } from './session.js'
 import { encryptedFilePath } from './credentials/encrypted-file.js'
 import { loadSettings, updateSettings, watchSettings, type StoredSettings } from './settings.js'
-import { registerInstance, listInstances } from './instances.js'
+import { registerInstance, listInstances, signedInOnlyElsewhere } from './instances.js'
 import { STORE_DESCRIPTIONS } from './credentials/store.js'
 import { PreviewServer } from './web/preview-server.js'
 import { recordFromEnvironment, recordProblem, RecordError } from './mail/record.js'
@@ -53,7 +53,7 @@ import { registerSendTools } from './tools/send.js'
 import { registerSavedAttachmentTools } from './tools/saved.js'
 import { SavedAttachments } from './mail/saved-attachments.js'
 import type { PendingSend } from './tools/confirm.js'
-import { setSignInHint, setLockedCheck, setPreviewBase } from './tools/failures.js'
+import { setSignInHint, setLockedCheck, setElsewhereCheck, setPreviewBase } from './tools/failures.js'
 import { pendingView } from './tools/pending-view.js'
 import { setHandshakeCapabilities } from './tools/capabilities.js'
 import { registerGuidance, INSTRUCTIONS } from './tools/guidance.js'
@@ -577,6 +577,11 @@ async function main(): Promise<void> {
   // So that a tool called while an encrypted file is still closed says what is
   // actually missing: the master password, not the Bridge password.
   setLockedCheck(() => session.locked())
+  // And so that a server which does not show the page says why it is not signed
+  // in while the one that does is: that sign-in stays with the other server.
+  // Read from the list of running servers at the moment of asking.
+  const signedInElsewhere = (): boolean => !web.running && signedInOnlyElsewhere(listInstances(), process.pid)
+  setElsewhereCheck(signedInElsewhere)
 
   let webUrl: string | undefined
   try {
@@ -696,6 +701,7 @@ async function main(): Promise<void> {
       occupant: () => web.occupant,
       pinSet: () => settings.pin !== undefined,
       signedIn: () => session.signedIn,
+      signedInElsewhere,
       address: () => session.address,
       storeKind: () => session.storeKind,
       locked: () => session.locked(),

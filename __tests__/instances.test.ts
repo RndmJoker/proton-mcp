@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { registerInstance, listInstances, isAlive, instancesDir } from '../src/instances.js'
+import { registerInstance, listInstances, isAlive, instancesDir, signedInOnlyElsewhere } from '../src/instances.js'
+import type { InstanceRecord } from '../src/instances.js'
 
 /**
  * The list of running servers the shared interface shows.
@@ -77,5 +78,48 @@ describe('the list of running servers', () => {
   it('lives beside the settings file unless told otherwise', () => {
     expect(instancesDir({ PROTON_MCP_SETTINGS_FILE: '/x/y/settings.json' })).toBe('/x/y/run/instances')
     expect(instancesDir({ PROTON_MCP_RUNTIME_DIR: '/r' })).toBe('/r/instances')
+  })
+})
+
+describe('a sign-in that stays with the server showing the page', () => {
+  /**
+   * The question a server asks when it finds itself without credentials:
+   * is the sign-in the page shows one that cannot reach me? Only then does it
+   * tell the user so instead of sending them to a form the page does not show.
+   */
+  const self = 4242
+  const showing = (change: Partial<InstanceRecord>): InstanceRecord => ({
+    pid: 1111,
+    version: '0.0.0-test',
+    startedAt: 1000,
+    signedIn: true,
+    servesInterface: true,
+    storeKind: 'session',
+    ...change,
+  })
+
+  it('is found for a password kept for this session only', () => {
+    expect(signedInOnlyElsewhere([showing({})], self)).toBe(true)
+  })
+
+  it('is found for an encrypted file opened on that server', () => {
+    expect(signedInOnlyElsewhere([showing({ storeKind: 'encrypted-file' })], self)).toBe(true)
+  })
+
+  it('is not claimed for a keyring or a plain file, which every server reads', () => {
+    expect(signedInOnlyElsewhere([showing({ storeKind: 'keyring' })], self)).toBe(false)
+    expect(signedInOnlyElsewhere([showing({ storeKind: 'plain-file' })], self)).toBe(false)
+  })
+
+  it('is not claimed when the server showing the page is not signed in', () => {
+    expect(signedInOnlyElsewhere([showing({ signedIn: false })], self)).toBe(false)
+  })
+
+  it('is not claimed for a server that is signed in but does not show the page', () => {
+    expect(signedInOnlyElsewhere([showing({ servesInterface: false })], self)).toBe(false)
+  })
+
+  it('is not claimed for the asking server itself', () => {
+    expect(signedInOnlyElsewhere([showing({ pid: self })], self)).toBe(false)
   })
 })

@@ -81,10 +81,33 @@ const LOCKED_MESSAGE =
   'master password that was chosen when they were saved. Nothing else is missing: the Bridge ' +
   'password is already on disk, and no address has to be entered again.'
 
-/** Which of the two situations a caller is in. */
-export type MissingCredentials = 'not-signed-in' | 'locked'
+/**
+ * The third reason: there is a sign-in, but on another server, in a way that
+ * stays there.
+ *
+ * Every assistant session starts its own server, and they share one page. A
+ * password kept for this session only, or read from an encrypted file opened
+ * there, lives in the memory of the server that shows the page and nowhere
+ * else. The page then shows that server's sign-in, with neither a sign-in
+ * form nor an unlock form for this one. Sent there with either message above,
+ * the user finds a page that says all is well, and signing in again for this
+ * session only signs in the same other server once more.
+ */
+export const ELSEWHERE_MESSAGE =
+  'proton-mcp is not signed in here, although the configuration page shows a sign-in. That ' +
+  'sign-in belongs to another running proton-mcp, the one that shows the page, and its password ' +
+  'stays with that server: it was kept for this session only, or comes from an encrypted file ' +
+  'opened there. Every assistant session starts its own server, and such a password does not ' +
+  'reach this one. Two ways out, both for the user: on the page, sign out and sign in again, ' +
+  'keeping the password where every running server reads it, such as the system keyring; or end ' +
+  'the session whose server shows the page, after which this server shows the page itself and ' +
+  'asks for what it needs.'
+
+/** Which of the three situations a caller is in. */
+export type MissingCredentials = 'not-signed-in' | 'locked' | 'elsewhere'
 
 function messageFor(state: MissingCredentials): string {
+  if (state === 'elsewhere') return ELSEWHERE_MESSAGE
   return state === 'locked' ? LOCKED_MESSAGE : MESSAGE
 }
 
@@ -143,8 +166,11 @@ export function signInFailure(
       ? 'Tell the user to open it and enter their master password there. Do not ask for the ' +
         'master password in this conversation: it is the one thing that can decrypt the stored ' +
         'credentials, and it has no business in a transcript.'
-      : 'Tell the user to open it and sign in there. Do not ask for the password in this ' +
-        'conversation.'
+      : state === 'elsewhere'
+        ? 'Tell the user to open it: its list of running servers shows which one is signed in ' +
+          'and where its password is kept. Do not ask for the password in this conversation.'
+        : 'Tell the user to open it and sign in there. Do not ask for the password in this ' +
+          'conversation.'
 
   return {
     content: [{ type: 'text', text: `${head}\n\nOpen ${url}\n\n${instruction}` }],
@@ -196,6 +222,9 @@ export function retryNote(
   if (attempt === 'accepted') {
     if (state === 'locked') {
       return 'The page was opened but the credentials are still locked, so the master password was not entered.'
+    }
+    if (state === 'elsewhere') {
+      return 'The page was opened, but this server is still not signed in: the sign-in shown there still belongs to the server that shows the page.'
     }
     return 'The sign-in page was opened but no credentials arrived, so the sign-in was not completed.'
   }

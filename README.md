@@ -217,7 +217,7 @@ If you pick the encrypted file, every later start shows an unlock page asking fo
 
 **Signing in again replaces what was stored.** The password then lives only where you chose last, and every other place is emptied. **Signing out empties all four.** If one of them cannot be emptied, a file the server may not delete for instance, the page says which and how to remove it by hand, because until then the next start signs in with it again.
 
-**With several sessions running**, a password kept in the system keyring or in a file reaches every one of their servers, which reread it whenever you sign in or out. One kept for this session only, or in an encrypted file opened in the interface, stays with the server that shows the interface, because it lives in that server's memory alone. The overview lists every running server with its sign-in, so this is visible rather than puzzling.
+**With several sessions running**, a password kept in the system keyring or in a file reaches every one of their servers, which reread it whenever you sign in or out. One kept for this session only, or in an encrypted file opened in the interface, stays with the server that shows the interface, because it lives in that server's memory alone. The overview lists every running server with its sign-in, so this is visible rather than puzzling. A server left out says so when a tool needs the sign-in, and names the two ways out: sign in again with the password kept where every server reads it, or end the session whose server shows the interface, so that the next one shows it and asks for what it needs.
 
 #### Without a browser
 

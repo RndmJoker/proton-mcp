@@ -53,10 +53,25 @@ export function setLockedCheck(check: () => Promise<boolean>): void {
   lockedCheck = check
 }
 
+/**
+ * Whether the server that shows the page is signed in with a password that
+ * stays with it, while this one is not.
+ *
+ * Asked before the locked check, because it overrules it: while that server
+ * shows the page, the page offers neither the sign-in form nor the unlock
+ * form, so the remedy the other two answers name is out of reach.
+ */
+let elsewhereCheck: (() => boolean) | undefined
+
+export function setElsewhereCheck(check: () => boolean): void {
+  elsewhereCheck = check
+}
+
 /** For tests, which must not inherit a hint from another test. */
 export function _clearSignInHint(): void {
   signInHint = undefined
   lockedCheck = undefined
+  elsewhereCheck = undefined
   previewBase = undefined
 }
 
@@ -90,8 +105,13 @@ export function previewUrl(digest: string): string | undefined {
   return previewBase?.(digest)
 }
 
-/** Which of the two situations the caller is in. */
+/** Which of the three situations the caller is in. */
 export async function missingCredentials(): Promise<MissingCredentials> {
+  try {
+    if (elsewhereCheck?.() === true) return 'elsewhere'
+  } catch {
+    // A list of servers that cannot be read leaves the other two answers.
+  }
   try {
     return (await lockedCheck?.()) === true ? 'locked' : 'not-signed-in'
   } catch {

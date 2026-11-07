@@ -96,6 +96,28 @@ export function registerInstance(
   }
 }
 
+/**
+ * Whether the server that shows the interface is signed in with a password
+ * that stays with it.
+ *
+ * Kept for this session only, or read from an encrypted file opened there, a
+ * password lives in that server's memory alone, and no other server can use
+ * it. While that server shows the page, the page offers the others neither
+ * the sign-in form nor the unlock form, only its own sign-in. A server left
+ * out has to say so, or a model told "not signed in" sends the user to a page
+ * that says all is well. Measured on 2026-11-07 with two sessions and a
+ * Bridge.
+ */
+export function signedInOnlyElsewhere(records: InstanceRecord[], self: number): boolean {
+  return records.some(
+    (record) =>
+      record.pid !== self &&
+      record.servesInterface &&
+      record.signedIn &&
+      (record.storeKind === 'session' || record.storeKind === 'encrypted-file'),
+  )
+}
+
 /** Every running server, oldest first. Files of finished processes are removed. */
 export function listInstances(dir = instancesDir()): InstanceRecord[] {
   let names: string[]

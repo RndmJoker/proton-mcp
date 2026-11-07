@@ -53,3 +53,26 @@ describe('open_configuration while the port is held', () => {
     expect(text(answer)).toContain('PROTON_MCP_WEB_PORT')
   })
 })
+
+describe('open_configuration on a server that does not show the page', () => {
+  const served = { running: () => false, reachable: () => true }
+
+  it('says the sign-in on the page belongs to the other server, not that a form waits there', async () => {
+    const answer = await capture({ ...served, signedInElsewhere: () => true })()
+    expect(text(answer)).toContain('belongs to another running proton-mcp, the one that shows the page')
+    expect(text(answer)).toContain('end the session whose server shows the page')
+    expect(text(answer)).not.toContain('leads to a form')
+  })
+
+  it('says it before a locked file, which the page cannot unlock for this server', async () => {
+    const answer = await capture({ ...served, signedInElsewhere: () => true, locked: async () => true })()
+    expect(text(answer)).toContain('belongs to another running proton-mcp')
+    expect(text(answer)).not.toContain('only need to be unlocked')
+  })
+
+  it('keeps the ordinary answer when nobody is signed in anywhere', async () => {
+    const answer = await capture({ ...served, signedInElsewhere: () => false })()
+    expect(text(answer)).toContain('Not signed in yet')
+    expect(text(answer)).not.toContain('belongs to another running proton-mcp')
+  })
+})

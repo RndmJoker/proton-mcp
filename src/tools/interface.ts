@@ -22,6 +22,7 @@ import type { StoreKind } from '../credentials/store.js'
 import { STORE_DESCRIPTIONS } from '../credentials/store.js'
 import { track } from '../in-flight.js'
 import type { PortOccupant } from '../web/server.js'
+import { ELSEWHERE_MESSAGE } from './sign-in-required.js'
 
 export interface InterfaceInfo {
   url: () => string
@@ -34,6 +35,11 @@ export interface InterfaceInfo {
   /** True while a PIN guards changes in the interface. */
   pinSet?: () => boolean
   signedIn: () => boolean
+  /**
+   * True when the server that shows the page is signed in with a password that
+   * stays with it, so this one cannot be signed in through the page right now.
+   */
+  signedInElsewhere?: () => boolean
   address: () => string | undefined
   storeKind: () => StoreKind | undefined
   /** Whether credentials are stored but still need a master password. */
@@ -107,6 +113,10 @@ export function registerInterfaceTool(server: McpServer, info: InterfaceInfo): v
             '',
             'The page shows the connection state and lets the user sign out.',
           )
+        } else if (info.signedInElsewhere?.() === true) {
+          // Before the locked case: while that server shows the page, the page
+          // has no unlock form for this one either.
+          lines.push(ELSEWHERE_MESSAGE)
         } else if ((await info.locked?.()) === true) {
           lines.push(
             'Credentials are stored in an encrypted file and only need to be unlocked. Opening the',
