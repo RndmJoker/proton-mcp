@@ -48,10 +48,20 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            extension/package-lock.json
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
         run: npm ci
+
+      # The browser extension (#59) has dependencies of its own, and the tests
+      # run its background. ci.yml got this step together with the extension,
+      # this file did not, so the release of 0.5.0 failed at the tests and never
+      # reached npm. A test in __tests__/packaging.test.ts now compares the two.
+      - name: Install the extension's dependencies
+        run: npm ci --prefix extension
 
       # The same gates the CI applies to a pull request. A release is built from
       # a commit that already passed them, but this job publishes from a tag

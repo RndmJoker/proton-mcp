@@ -70,6 +70,32 @@ describe('the published package', () => {
   })
 })
 
+describe('the workflow that publishes', () => {
+  /**
+   * publish.yml runs the gates of ci.yml again, from the tag, once per
+   * release. When the two drift apart, publish.yml is the one nobody notices
+   * until a release fails: 0.5.0 never reached npm, because ci.yml had learned
+   * to install the browser extension's dependencies and publish.yml had not.
+   */
+  const workflow = (name: string): string => readFileSync(join(root, '.github', 'workflows', name), 'utf8')
+  const commands = (text: string): string[] => [...text.matchAll(/^\s*run:\s*(.+)$/gm)].map((m) => (m[1] ?? '').trim())
+
+  /** The installs a workflow runs before its first test command. */
+  const installsBeforeTests = (text: string): string[] => {
+    const all = commands(text)
+    const tests = all.findIndex((command) => /^npm run test\b/.test(command))
+    expect(tests).toBeGreaterThan(0)
+    return all.slice(0, tests).filter((command) => /^npm ci\b/.test(command))
+  }
+
+  it('installs everything the CI installs before the tests', () => {
+    const ci = installsBeforeTests(workflow('ci.yml'))
+    const publish = installsBeforeTests(workflow('publish.yml'))
+    expect(ci).toContain('npm ci --prefix extension')
+    for (const install of ci) expect(publish).toContain(install)
+  })
+})
+
 describe('the name the server calls itself', () => {
   const source = readFileSync(join(root, 'src/server.ts'), 'utf8')
 
