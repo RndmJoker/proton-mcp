@@ -121,8 +121,41 @@ export const DEFAULT_WEB_PORT = 7345
 /** How often a server that does not serve the interface tries to take it over. */
 export const TAKEOVER_INTERVAL_MS = 10_000
 
-/** Who is on the port: another proton-mcp, something else, or nobody. */
-export type PortOccupant = 'proton-mcp' | 'other' | 'none'
+/**
+ * Who is on the port: another proton-mcp, an older one, something else, or
+ * nobody.
+ *
+ * "older" is a proton-mcp from before the shared interface, 0.4 and earlier.
+ * Each of those served an interface of its own, with a token in the address,
+ * and knows nothing of the others. One still running in a session started
+ * before an update holds the port until that session ends.
+ */
+export type PortOccupant = 'proton-mcp' | 'older' | 'other' | 'none'
+
+/**
+ * How much of an answer the probe reads: the health answer of a current
+ * proton-mcp, and the head of an older one's page, whose title comes within
+ * the first 300 bytes.
+ */
+const PROBE_BYTES = 1024
+
+/**
+ * Names the occupant from the start of its answer to /health.
+ *
+ * A current proton-mcp answers with a small JSON object. An older one has no
+ * such address and answers every request without its token with a page of its
+ * own, titled "Not available - proton-mcp": measured with 0.4.13, and the
+ * title has had this form since 0.3.0. Anything else is another program.
+ */
+function classifyOccupant(start: string): Exclude<PortOccupant, 'none'> {
+  try {
+    const body = JSON.parse(start) as { app?: unknown }
+    if (body.app === 'proton-mcp') return 'proton-mcp'
+  } catch {
+    // Not JSON, so not a current proton-mcp. Perhaps an older one.
+  }
+  return /<title>[^<]* - proton-mcp<\/title>/.test(start) ? 'older' : 'other'
+}
 
 export interface WebInterfaceOptions {
   /**
@@ -386,27 +419,27 @@ export class WebInterface {
    *
    * The answer decides between "another session serves the interface, all is
    * well" and "something else sits on this port", which the user has to hear
-   * about, because then nobody serves the interface at all.
+   * about, because then nobody serves the interface at all. An older proton-mcp
+   * is the third answer: no interface either, but the remedy is to restart the
+   * sessions that still run it, not to move every server to another port.
    */
   static async probe(port: number, timeoutMs = 1500): Promise<PortOccupant> {
     return new Promise((resolve) => {
       const request = httpRequest(
         { host: BIND_ADDRESS, port, path: '/health', method: 'GET', timeout: timeoutMs },
         (response) => {
+          // The start of the answer, however long the whole is. Collecting
+          // only answers that were short in total missed an older proton-mcp,
+          // whose page runs to a few kilobytes and arrives in one piece.
           const chunks: Buffer[] = []
-          let size = 0
+          let kept = 0
           response.on('data', (chunk: Buffer) => {
-            size += chunk.length
-            if (size <= 256) chunks.push(chunk)
+            if (kept >= PROBE_BYTES) return
+            const part = chunk.subarray(0, PROBE_BYTES - kept)
+            chunks.push(part)
+            kept += part.length
           })
-          response.on('end', () => {
-            try {
-              const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { app?: unknown }
-              resolve(body.app === 'proton-mcp' ? 'proton-mcp' : 'other')
-            } catch {
-              resolve('other')
-            }
-          })
+          response.on('end', () => resolve(classifyOccupant(Buffer.concat(chunks).toString('utf8'))))
         },
       )
       request.on('timeout', () => request.destroy())
@@ -442,6 +475,13 @@ export class WebInterface {
         `port ${wanted} is held by a program that is not proton-mcp, so the web interface is not ` +
           'available. Set PROTON_MCP_WEB_PORT to a free port for every proton-mcp, or stop that ' +
           'program. This server takes the port as soon as it is free.',
+      )
+    } else if (this.#occupant === 'older') {
+      this.#notify(
+        `port ${wanted} is held by an older proton-mcp, from a session started before the update. ` +
+          'It serves an interface of its own and knows nothing of the shared one, so the web ' +
+          'interface is not available until that session ends. This server takes the port over ' +
+          'then; restarting the sessions that still run the older version makes that happen now.',
       )
     }
     this.#scheduleTakeover(wanted)

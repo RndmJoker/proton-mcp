@@ -21,6 +21,7 @@ import type { McpServer, CallToolResult } from '@modelcontextprotocol/server'
 import type { StoreKind } from '../credentials/store.js'
 import { STORE_DESCRIPTIONS } from '../credentials/store.js'
 import { track } from '../in-flight.js'
+import type { PortOccupant } from '../web/server.js'
 
 export interface InterfaceInfo {
   url: () => string
@@ -28,6 +29,8 @@ export interface InterfaceInfo {
   running: () => boolean
   /** True when the interface answers at the address, from this server or another. */
   reachable?: () => boolean
+  /** Who held the port when this server last found it taken. */
+  occupant?: () => PortOccupant
   /** True while a PIN guards changes in the interface. */
   pinSet?: () => boolean
   signedIn: () => boolean
@@ -58,17 +61,26 @@ export function registerInterfaceTool(server: McpServer, info: InterfaceInfo): v
       track(async () => {
         const reachable = info.reachable?.() ?? info.running()
         if (!reachable) {
+          // An older proton-mcp on the port is the ordinary case right after an
+          // update, while sessions started before it still run. Calling it a
+          // stranger sent users off to move every server to another port.
+          const held =
+            info.occupant?.() === 'older'
+              ? 'Its port is held by an older proton-mcp, still running in a session the user ' +
+                'started before updating. That version serves an interface of its own and knows ' +
+                'nothing of the shared one. Tell the user to restart the sessions that still run ' +
+                'it, or to wait until they end.'
+              : 'Its port is held by a program that is not proton-mcp. Tell the user to stop that ' +
+                'program or to set PROTON_MCP_WEB_PORT to a free port, the same one for every ' +
+                'proton-mcp they run.'
           const failure: CallToolResult = {
             content: [
               {
                 type: 'text' as const,
                 text:
-                  `The configuration interface is not available at ${info.url()}. Its port is ` +
-                  'held by a program that is not proton-mcp. Tell the user to stop that program ' +
-                  'or to set PROTON_MCP_WEB_PORT to a free port, the same one for every ' +
-                  'proton-mcp they run. This server takes the port over as soon as it is free. ' +
-                  'Credentials can still be provided through the BRIDGE_USER and BRIDGE_PASS ' +
-                  'environment variables.',
+                  `The configuration interface is not available at ${info.url()}. ${held} This ` +
+                  'server takes the port over as soon as it is free. Credentials can still be ' +
+                  'provided through the BRIDGE_USER and BRIDGE_PASS environment variables.',
               },
             ],
             isError: true,

@@ -60,7 +60,7 @@ The server also tells an assistant how it works, so the rules are not something 
 
 Underneath: a held IMAP connection that recovers from a Bridge restart, stable identifiers based on the Message-ID, HTML to text conversion, filtering of the public key Proton attaches to every sent message, and a character budget so a single message cannot exhaust a context window.
 
-There is also a **local web interface**, on `127.0.0.1` only, at one fixed address: `http://127.0.0.1:7345/` unless `PROTON_MCP_WEB_PORT` says otherwise. Every assistant session starts its own server, and all of them share this one interface and its settings: the first one to start serves it, and when that one stops, the next takes over. It is divided into sections, reached from a rail on the left:
+There is also a **local web interface**, on `127.0.0.1` only, at one fixed address: `http://127.0.0.1:7345/` unless `PROTON_MCP_WEB_PORT` says otherwise. Every assistant session starts its own server, and all of them share this one interface and its settings: the first one to start serves it, and when that one stops, the next takes over. Right after an update, a server from before 0.5.0 may still run in a session started earlier and hold that address with an interface of its own; the shared one appears as soon as that session ends, and at once if you restart it. It is divided into sections, reached from a rail on the left:
 
 | Section | What is there |
 | :--- | :--- |

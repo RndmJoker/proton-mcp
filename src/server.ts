@@ -693,6 +693,7 @@ async function main(): Promise<void> {
       url: () => web.url,
       running: () => web.running,
       reachable: () => web.reachable,
+      occupant: () => web.occupant,
       pinSet: () => settings.pin !== undefined,
       signedIn: () => session.signedIn,
       address: () => session.address,
