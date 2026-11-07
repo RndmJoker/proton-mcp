@@ -40,6 +40,7 @@ export type Section =
   | 'mailboxes'
   | 'bridge'
   | 'credentials'
+  | 'permissions'
   | 'activity'
   /** Pages outside the navigation: sign-in, unlock, rejection. */
   | 'none'
@@ -72,6 +73,7 @@ const ICONS = {
   credentials:
     '<circle cx="9" cy="12" r="4"/><path d="M13 12h8M18 12v4"/>',
   activity: '<path d="M3 12h4l3 7 4-14 3 7h4"/>',
+  permissions: '<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/>',
 } as const
 
 function icon(name: keyof typeof ICONS): string {
@@ -107,6 +109,12 @@ function navigation(): NavGroup[] {
           path: '/credentials',
           label: 'Credentials',
           icon: icon('credentials'),
+        },
+        {
+          section: 'permissions',
+          path: '/permissions',
+          label: 'Permissions',
+          icon: icon('permissions'),
         },
         { section: 'activity', path: '/activity', label: 'Activity', icon: icon('activity') },
       ],
@@ -587,9 +595,9 @@ const DISCLAIMER =
  * browser, because a setting the server holds survives a different browser.
  */
 export type DisclaimerState =
-  /** Shown, with the button. The token is bound to the dismissal path. */
+  /** Shown, with the button. The CSRF token is bound to the dismissal path. */
   | { csrf: string; from: Section }
-  /** Shown without a button: no valid session to remember a dismissal against. */
+  /** Shown without a button: nothing to remember a dismissal with. */
   | 'plain'
   /** Dismissed earlier, so not shown at all. */
   | 'dismissed'
@@ -603,20 +611,34 @@ export interface LayoutOptions {
    * yet, and a rail full of dead links would suggest otherwise.
    */
   section: Section
-  /** Needed to build the links. Absent before anybody has signed in. */
-  token?: string
   /** Defaults to showing it without a button, the safe direction. */
   disclaimer?: DisclaimerState
 }
 
-function disclaimerBanner(state: DisclaimerState, token: string | undefined): string {
+/**
+ * The PIN field every form carries while a PIN is set.
+ *
+ * Asked again on every change rather than remembered in a cookie. A browser
+ * that remembered it would hand it to whatever drives that browser, and an
+ * assistant with a browser tool can drive the very browser the user signed in
+ * with. Empty markup when no PIN is set, so the forms look as they always did.
+ */
+export function pinField(required: boolean): string {
+  if (!required) return ''
+  return `<label>PIN
+    <input type="password" name="pin" autocomplete="off" required>
+  </label>
+  <p class="hint">Every change here asks for the PIN, so that nothing but a person who knows it can make one.</p>`
+}
+
+function disclaimerBanner(state: DisclaimerState): string {
   if (state === 'dismissed') return ''
-  if (state === 'plain' || token === undefined) {
+  if (state === 'plain') {
     return `<div class="disclaimer"><p>${DISCLAIMER}</p></div>`
   }
   return `<div class="disclaimer">
   <p>${DISCLAIMER}</p>
-  <form method="post" action="/dismiss-notice?token=${escapeHtml(token)}">
+  <form method="post" action="/dismiss-notice">
     <input type="hidden" name="csrf" value="${escapeHtml(state.csrf)}">
     <input type="hidden" name="from" value="${escapeHtml(state.from)}">
     <button type="submit" class="dismiss" title="Do not show this again"
@@ -625,12 +647,12 @@ function disclaimerBanner(state: DisclaimerState, token: string | undefined): st
 </div>`
 }
 
-function rail(current: Section, token: string): string {
+function rail(current: Section): string {
   const groups = navigation()
     .map((group) => {
       const links = group.entries
         .map((entry) => {
-          const href = `${entry.path}?token=${escapeHtml(token)}`
+          const href = entry.path
           const mark = entry.section === current ? ' aria-current="page"' : ''
           return `<a href="${href}"${mark}>${entry.icon}<span>${escapeHtml(entry.label)}</span></a>`
         })
@@ -653,8 +675,8 @@ function rail(current: Section, token: string): string {
 }
 
 export function layout(options: LayoutOptions): string {
-  const { title, body, section, token, disclaimer = 'plain' } = options
-  const navigable = section !== 'none' && token !== undefined
+  const { title, body, section, disclaimer = 'plain' } = options
+  const navigable = section !== 'none'
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -667,10 +689,10 @@ export function layout(options: LayoutOptions): string {
 </head>
 <body>
 <div class="frame">
-${navigable ? rail(section, token) : ''}
+${navigable ? rail(section) : ''}
 <div class="content">
 <main>
-${disclaimerBanner(disclaimer, token)}
+${disclaimerBanner(disclaimer)}
 ${body}
 </main>
 </div>

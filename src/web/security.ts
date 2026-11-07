@@ -3,15 +3,19 @@
  *
  * The threat model is not "someone on the internet": the server binds to
  * loopback only, so nobody reaches it from outside. What has to be defended
- * against is anything else running on the same machine, and anything the user's
- * browser is talked into doing by a page from elsewhere.
+ * against is anything the user's browser is talked into doing by a page from
+ * elsewhere, and, when the user sets one, anything on the same machine that does
+ * not know the PIN.
  *
  * Four defences, each against a specific attack:
  *
- * 1. **A session token in the URL.** Any local program can send a request to
- *    127.0.0.1. Without a secret it could drive the interface, read the state
- *    and store credentials of its choosing. The token is generated per process
- *    and never written to disk.
+ * 1. **An optional PIN on every change.** Any local program can send a request
+ *    to 127.0.0.1, and so can the assistant, through a browser tool. Until
+ *    2026-11-05 a token in the address kept them out, but the address reached
+ *    the assistant through `open_configuration`, so the token protected against
+ *    everything except the one party the switches for autonomy are about. A PIN
+ *    the user types and the assistant never sees does. It is optional: without
+ *    one, anything on this machine can change the settings, and the pages say so.
  * 2. **Host header check.** A page on the internet can resolve its own domain to
  *    127.0.0.1 and have the browser send requests there. The browser then treats
  *    that domain as the origin, so same-origin rules do not help. Rejecting any
@@ -29,15 +33,13 @@
  * reveal how much of a token was right.
  */
 
-import { randomBytes, timingSafeEqual, createHmac } from 'node:crypto'
+import { randomBytes, timingSafeEqual, createHmac, scrypt } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 
 /** Hostnames that mean this machine. Anything else is rejected. */
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
 
 export interface SessionSecrets {
-  /** Grants access at all. Part of the URL the user opens. */
-  accessToken: string
   /** Signs CSRF tokens. Never leaves the process. */
   csrfSecret: string
 }
@@ -45,10 +47,83 @@ export interface SessionSecrets {
 /** Creates the per-process secrets. */
 export function createSession(): SessionSecrets {
   return {
-    // 32 bytes base64url: long enough that guessing is hopeless, short enough
-    // to survive being copied into a browser.
-    accessToken: randomBytes(32).toString('base64url'),
     csrfSecret: randomBytes(32).toString('base64url'),
+  }
+}
+
+/**
+ * A PIN as it is stored: salted and run through scrypt, never the PIN itself.
+ *
+ * The settings file is readable by the user's own programs, the assistant
+ * included when it can read files. A plain PIN there would be a PIN the
+ * assistant can look up. A hash of a short PIN can still be guessed offline,
+ * which is why the length rule below asks for more than four digits and why
+ * scrypt rather than a fast hash: every guess has to pay for the memory.
+ */
+export interface StoredPin {
+  salt: string
+  hash: string
+}
+
+/** scrypt with Node's default cost, named so a change here is deliberate. */
+const PIN_KEY_LENGTH = 32
+const PIN_COST = { N: 16384, r: 8, p: 1 }
+
+function derive(pin: string, salt: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(pin.normalize('NFC'), salt, PIN_KEY_LENGTH, PIN_COST, (error, key) =>
+      error ? reject(error) : resolve(key),
+    )
+  })
+}
+
+/** Why a PIN cannot be used, or nothing when it can. */
+export function pinProblem(pin: string): string | undefined {
+  if (pin.length < 6) return 'The PIN needs at least 6 characters.'
+  if (pin.length > 128) return 'The PIN can have at most 128 characters.'
+  return undefined
+}
+
+export async function hashPin(pin: string): Promise<StoredPin> {
+  const salt = randomBytes(16).toString('base64url')
+  return { salt, hash: (await derive(pin, salt)).toString('base64url') }
+}
+
+export async function pinMatches(pin: string, stored: StoredPin): Promise<boolean> {
+  const presented = await derive(pin, stored.salt)
+  return safeEqual(presented.toString('base64url'), stored.hash)
+}
+
+/**
+ * Slows down guessing.
+ *
+ * After `max` wrong PINs within `windowMs`, every attempt is refused until the
+ * window has passed, the right PIN included: a lock that the right answer opens
+ * early tells the guesser when they found it. Held in memory by the server that
+ * shows the interface, which is the only one that checks PINs.
+ */
+export class AttemptLimiter {
+  #failures: number[] = []
+  readonly #max: number
+  readonly #windowMs: number
+
+  constructor(max = 5, windowMs = 60_000) {
+    this.#max = max
+    this.#windowMs = windowMs
+  }
+
+  /** Whether an attempt may be checked at all right now. */
+  allowed(now = Date.now()): boolean {
+    this.#failures = this.#failures.filter((at) => now - at < this.#windowMs)
+    return this.#failures.length < this.#max
+  }
+
+  fail(now = Date.now()): void {
+    this.#failures.push(now)
+  }
+
+  reset(): void {
+    this.#failures = []
   }
 }
 
@@ -121,7 +196,6 @@ export function csrfValid(secrets: SessionSecrets, purpose: string, presented: s
 export type RejectionReason =
   | 'bad-host'
   | 'bad-origin'
-  | 'bad-token'
   | 'bad-csrf'
   | 'method-not-allowed'
 
@@ -134,8 +208,6 @@ export interface CheckOptions {
   request: IncomingMessage
   secrets: SessionSecrets
   port: number
-  /** The token presented by the client, from the query string or a header. */
-  presentedToken: string | undefined
   /** True for requests that change something. */
   writing: boolean
   /** For writing requests: the CSRF token and what it is for. */
@@ -145,17 +217,15 @@ export interface CheckOptions {
 /**
  * Runs every check in order.
  *
- * Order matters: the host check comes before the token check, so a rebinding
- * attempt is refused before it can even try tokens.
+ * Order matters: the host check comes first, so a rebinding attempt is refused
+ * before anything else is looked at. The PIN is not checked here: a wrong PIN is
+ * the user's mistake and gets a page that says so, where every failure in here
+ * gets the same refusal that says nothing.
  */
 export function checkRequest(options: CheckOptions): CheckResult {
-  const { request, secrets, port, presentedToken, writing, csrf } = options
+  const { request, secrets, port, writing, csrf } = options
 
   if (!isAllowedHost(request.headers.host)) return { ok: false, reason: 'bad-host' }
-
-  if (!presentedToken || !safeEqual(secrets.accessToken, presentedToken)) {
-    return { ok: false, reason: 'bad-token' }
-  }
 
   if (writing) {
     if (!isAllowedOrigin(request.headers.origin, port)) return { ok: false, reason: 'bad-origin' }

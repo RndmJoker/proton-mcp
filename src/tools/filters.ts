@@ -1,7 +1,14 @@
 /**
  * Tool: manage_filters
  *
- * Answers a request about Proton Mail filters, which this server cannot reach.
+ * Explains the way to Proton Mail filters by hand, for when the browser
+ * extension is not there (#56, adjusted for #59).
+ *
+ * Since #59 this server reads and proposes filters through its browser
+ * extension, with list_filters and propose_filter. This tool stays for the
+ * case those cannot help: the extension is not set up or not active, or the
+ * user wants to make a change themselves. What follows was written when it
+ * was the only way, and it still describes that way.
  *
  * The Bridge carries mail over IMAP and SMTP and nothing else: no filters, no
  * forwarding, no account settings. Proton's own web app manages filters through
@@ -35,11 +42,13 @@ export const FILTER_PAGE = 'https://account.proton.me/u/0/mail/filters'
 export const SIEVE_GUIDE = 'https://proton.me/support/sieve-advanced-custom-filters'
 
 export const DESCRIPTION =
-  'Proton Mail filters, the rules that sort incoming mail, cannot be read or changed through ' +
-  'this server, because Proton offers no interface for them to other programs. Call this ' +
-  'whenever the user asks about filters, rules, sorting incoming mail automatically or Sieve. ' +
-  "The answer explains the way that works instead, through Proton's settings page in a " +
-  'browser and only with the user agreeing to each change.'
+  'Explains how to work on Proton Mail filters, the rules for sorting incoming mail, by hand: ' +
+  "through Proton's settings page in a browser, in Sieve, with the user agreeing to each " +
+  'change. Reading, proposing, applying, moving, deleting and switching filters goes through ' +
+  'list_filters, get_filters, propose_filter, apply_filter, reorder_filters, delete_filter and ' +
+  'set_filter_status, which use the browser extension ' +
+  'Proton MCP Helper; call this when they report that the extension is not active, or when the ' +
+  'user wants to make a change themselves.'
 
 /**
  * The answer, the same every time.
@@ -49,11 +58,13 @@ export const DESCRIPTION =
  * German page is not left searching for a word that is not there.
  */
 export const ANSWER = [
-  'Filters cannot be read or changed through this server. The Proton Mail Bridge carries mail ' +
-    "over IMAP and SMTP and nothing else, and the interface Proton's own web app uses for " +
-    "filters is not open to other programs. Nothing about the user's filters is known here.",
+  'The Proton Mail Bridge carries mail over IMAP and SMTP and nothing else, so filters are not ' +
+    'reached through it. This server reads, proposes, applies, moves, deletes and switches them ' +
+    'through its browser extension Proton MCP Helper instead: list_filters, get_filters, ' +
+    'propose_filter, apply_filter, reorder_filters, delete_filter and set_filter_status. Use those ' +
+    'whenever the extension is active.',
   '',
-  "What works instead, with the user's agreement:",
+  "The way by hand, for when it is not, with the user's agreement:",
   '',
   `1. Ask the user first whether you may look at their filters at ${FILTER_PAGE}, where every ` +
     'rule is listed. A different number after /u/ is fine: Proton redirects to the signed-in ' +
@@ -79,8 +90,9 @@ export const ANSWER = [
     'into Add sieve filter or Edit Sieve themselves.',
   '',
   "Messages that already exist are a separate matter. Sort them with this server's own tools, " +
-    'search_messages to find them and move_messages or add_label to file them, or point the user ' +
-    'to Apply to existing messages in the same menu, which runs a saved filter over the mailbox.',
+    'search_messages to find them and move_messages or add_label to file them. A saved filter ' +
+    'runs over the whole mailbox with apply_filter while the extension is active; without it, ' +
+    'point the user to "Apply filter to existing emails" in Proton\'s settings.',
 ].join('\n')
 
 export function registerFilterTool(server: McpServer): void {

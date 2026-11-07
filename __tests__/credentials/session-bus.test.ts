@@ -110,7 +110,6 @@ describe('the keyring option when the kernel holds it', () => {
   it('shows the note on the option itself', async () => {
     const page = (stores: Awaited<ReturnType<typeof listStores>>) =>
       loginPage({
-        token: 't',
         csrf: 'c',
         disclaimer: 'plain',
         bridgeHost: '127.0.0.1',

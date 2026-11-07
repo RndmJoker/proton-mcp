@@ -61,17 +61,16 @@ describe('what the description promises', () => {
     }
   })
 
-  it('says up front that filters are out of reach here', () => {
-    expect(DESCRIPTION).toContain('cannot be read or changed through this server')
+  it('sends an assistant to the extension tools first, and says this one is the way by hand', () => {
+    for (const tool of ['list_filters', 'propose_filter', 'apply_filter']) expect(DESCRIPTION).toContain(tool)
+    expect(DESCRIPTION).toContain('by hand')
   })
 })
 
 describe('what the answer tells an assistant', () => {
-  it('admits that nothing about the filters is known here', () => {
-    // Without this an assistant tends to fill the gap with rules it imagines
-    // the user has.
-    expect(ANSWER).toContain('Filters cannot be read or changed through this server')
-    expect(ANSWER).toContain("Nothing about the user's filters is known here")
+  it('names the extension tools as the first way, and the Bridge as no way at all', () => {
+    expect(ANSWER).toContain('filters are not reached through it')
+    for (const tool of ['list_filters', 'propose_filter', 'apply_filter']) expect(ANSWER).toContain(tool)
   })
 
   it("names the filter page and the Sieve documentation, both on Proton's own domains", () => {

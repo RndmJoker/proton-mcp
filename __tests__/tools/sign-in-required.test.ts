@@ -12,6 +12,7 @@ import {
   withSignIn,
   setSignInHint,
   setLockedCheck,
+  setElsewhereCheck,
   describeFailure,
   _clearSignInHint,
 } from '../../src/tools/failures.js'
@@ -359,6 +360,66 @@ describe('credentials that are only locked', () => {
   })
 })
 
+describe('a sign-in that stays with the server showing the page', () => {
+  /**
+   * The situation, measured with two sessions and a Bridge: the user signed in
+   * for this session only, on the page another session's server shows. That
+   * server is signed in, this one is not, and the page offers this one no form
+   * at all. Told "open the page and sign in", the user finds a page that says
+   * all is well, and a second sign-in for this session only lands on the same
+   * other server again.
+   */
+  const missing = async (): Promise<never> => {
+    throw new NotSignedInError('nothing here')
+  }
+
+  it('says whose sign-in the page shows and how to get out, instead of sending the user to a form', async () => {
+    setSignInHint(() => url)
+    setElsewhereCheck(() => true)
+    const answer = text(await withSignIn(context(), missing))
+
+    expect(answer).toContain('not signed in here, although the configuration page shows a sign-in')
+    expect(answer).toContain('belongs to another running proton-mcp, the one that shows the page')
+    expect(answer).toContain('sign out and sign in again')
+    expect(answer).toContain('end the session whose server shows the page')
+    expect(answer).toContain(url)
+    expect(answer).toContain('its list of running servers shows which one is signed in')
+    expect(answer).toContain('Do not ask for the password in this conversation')
+    // The errand that goes round in a circle.
+    expect(answer).not.toContain('enter the Proton address together with the Bridge password')
+  })
+
+  it('wins over a locked file, which the page cannot unlock for this server either', async () => {
+    setSignInHint(() => url)
+    setElsewhereCheck(() => true)
+    setLockedCheck(async () => true)
+    const answer = text(await withSignIn(context(), missing))
+
+    expect(answer).toContain('belongs to another running proton-mcp')
+    expect(answer).not.toContain('encrypted file that is not open yet')
+  })
+
+  it('carries the same message into the elicitation', async () => {
+    setSignInHint(() => url)
+    setElsewhereCheck(() => true)
+    const request = await withSignIn(context({ urlElicitation: true }), missing)
+    expect(isInputRequiredResult(request)).toBe(true)
+    expect(JSON.stringify(request)).toContain('belongs to another running proton-mcp')
+  })
+
+  it('explains a retry that still finds nothing', () => {
+    expect(retryNote('accepted', 'elsewhere')).toContain('still belongs to the server that shows the page')
+  })
+
+  it('leaves the other answers alone when the list of servers cannot be read', async () => {
+    setSignInHint(() => url)
+    setElsewhereCheck(() => {
+      throw new Error('the directory is gone')
+    })
+    setLockedCheck(async () => true)
+    expect(text(await withSignIn(context(), missing))).toContain('encrypted file that is not open yet')
+  })
+})
 
 describe('a Bridge that cannot be reached', () => {
   /**

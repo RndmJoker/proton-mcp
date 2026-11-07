@@ -2,7 +2,16 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, statSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadSettings, saveSettings, settingsPath, isPort } from '../src/settings.js'
+import {
+  loadSettings,
+  saveSettings,
+  settingsPath,
+  isPort,
+  sanitise,
+  updateSettings,
+  watchSettings,
+} from '../src/settings.js'
+import { readdirSync } from 'node:fs'
 import { portsSetExplicitly } from '../src/config.js'
 
 /**
@@ -139,5 +148,66 @@ describe('portsSetExplicitly', () => {
 
   it('reports nothing set on an empty environment', () => {
     expect(portsSetExplicitly({})).toEqual({ imapPort: false, smtpPort: false })
+  })
+})
+
+describe('the settings shared by every running server', () => {
+  it('keeps the PIN, the levels, the bounds and the copy when they have the right shape', () => {
+    const kept = sanitise({
+      pin: { salt: 's', hash: 'h' },
+      credentialsGeneration: 3,
+      levels: { send_message: 'act', trash_messages: 'off' },
+      limits: { allowed: ['@example.com', 'a@b.example'], maxPerHour: 10, until: '2026-12-31' },
+      record: { address: 'archive@example.com', mode: 'bcc' },
+    })
+    expect(kept).toEqual({
+      pin: { salt: 's', hash: 'h' },
+      credentialsGeneration: 3,
+      levels: { send_message: 'act', trash_messages: 'off' },
+      limits: { allowed: ['@example.com', 'a@b.example'], maxPerHour: 10, until: '2026-12-31' },
+      record: { address: 'archive@example.com', mode: 'bcc' },
+    })
+  })
+
+  it('drops what has the wrong shape, one value at a time', () => {
+    const kept = sanitise({
+      pin: { salt: '', hash: 'h' },
+      credentialsGeneration: -1,
+      levels: { send_message: 'always', 'Not A Tool': 'act', trash_messages: 'ask' },
+      limits: { allowed: 'everyone', maxPerHour: 0, until: 'tomorrow' },
+      record: { address: 'archive@example.com', mode: 'to' },
+    })
+    expect(kept).toEqual({ levels: { trash_messages: 'ask' } })
+  })
+
+  it('keeps what filters may do, in a fixed order, and drops names it does not know', () => {
+    expect(sanitise({ filterActions: ['discard', 'trash', 'redirect', 42] })).toEqual({ filterActions: ['trash', 'discard'] })
+    expect(sanitise({ filterActions: ['forward'] })).toEqual({})
+    expect(sanitise({ filterActions: 'trash' })).toEqual({})
+  })
+
+  it('leaves no temporary file behind after writing', async () => {
+    await saveSettings({ imapPort: 1143 }, path)
+    expect(readdirSync(dir)).toEqual(['settings.json'])
+  })
+
+  it('changes one setting without undoing another written meanwhile', async () => {
+    // Another server writes the ports; this one sets the PIN afterwards. Writing
+    // a copy held in memory would quietly drop the ports again.
+    await saveSettings({ imapPort: 2143 }, path)
+    await updateSettings((current) => ({ ...current, pin: { salt: 's', hash: 'h' } }), path)
+    expect(await loadSettings(path)).toEqual({ imapPort: 2143, pin: { salt: 's', hash: 'h' } })
+  })
+
+  it('tells a watcher when another writer changes the file', async () => {
+    const seen: Array<number | undefined> = []
+    const stop = watchSettings((settings) => seen.push(settings.credentialsGeneration), path, 20)
+    try {
+      await saveSettings({ credentialsGeneration: 7 }, path)
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(seen).toContain(7)
+    } finally {
+      stop()
+    }
   })
 })

@@ -17,7 +17,6 @@ import { formatDuration } from '../../src/web/layout.js'
  */
 
 let web: WebInterface
-let token: string
 let snapshot: StatusSnapshot
 let ports: Array<{ imapPort: number; smtpPort: number }>
 let tests: number
@@ -111,7 +110,7 @@ beforeEach(async () => {
     },
   }
   web = build()
-  token = new URL(await web.start()).searchParams.get('token') ?? ''
+  await web.start()
 })
 
 afterEach(async () => {
@@ -156,28 +155,28 @@ function send(path: string, body?: Record<string, string>): Promise<Response> {
 
 /** The hidden csrf field of one form on a rendered page. */
 function csrfFrom(body: string, action: string): string {
-  const form = body.split(`action="${action}?token=`)[1] ?? ''
+  const form = body.split(`action="${action}"`)[1] ?? ''
   return /name="csrf" value="([^"]+)"/.exec(form)?.[1] ?? ''
 }
 
 describe('the sections and how they are reached', () => {
   it('offers every section in the navigation', async () => {
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     for (const path of ['/mailboxes', '/bridge', '/credentials', '/activity']) {
-      expect(body).toContain(`href="${path}?token=${token}"`)
+      expect(body).toContain(`href="${path}"`)
     }
   })
 
   it('marks the section being looked at', async () => {
-    const { body } = await send(`/bridge?token=${token}`)
-    expect(body).toContain(`href="/bridge?token=${token}" aria-current="page"`)
+    const { body } = await send(`/bridge`)
+    expect(body).toContain(`href="/bridge" aria-current="page"`)
     // And only that one. Matched on the full attribute rather than the name,
     // which also appears in the stylesheet.
     expect(body.match(/aria-current="page"/g)).toHaveLength(1)
   })
 
   it('refuses a path nobody listed', async () => {
-    const { status } = await send(`/settings?token=${token}`)
+    const { status } = await send(`/settings`)
     expect(status).toBe(404)
   })
 
@@ -185,7 +184,7 @@ describe('the sections and how they are reached', () => {
     // The CSP forbids it. A page that grew one would be refused by the browser
     // rather than by anything here, which is a bad way to find out.
     for (const path of ['/', '/bridge', '/credentials', '/activity', '/mailboxes']) {
-      const { body } = await send(`${path}?token=${token}`)
+      const { body } = await send(`${path}`)
       expect(body).not.toMatch(/<script/i)
       expect(body).not.toMatch(/\son[a-z]+=/i)
     }
@@ -194,30 +193,30 @@ describe('the sections and how they are reached', () => {
 
 describe('what the overview reports', () => {
   it('names the connection, the address and where credentials are kept', async () => {
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     expect(body).toContain('connected')
     expect(body).toContain('someone@example.com')
     expect(body).toContain('System keyring')
   })
 
   it('shows both Bridge ports and the interface port', async () => {
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     expect(body).toContain('127.0.0.1:1143')
     expect(body).toContain('127.0.0.1:1025')
     expect(body).toContain(`127.0.0.1:${web.port}`)
   })
 
   it('states the read-only mode plainly', async () => {
-    const withoutWrites = await send(`/?token=${token}`)
+    const withoutWrites = await send(`/`)
     expect(withoutWrites.body).toContain('read and write')
 
     snapshot.readOnly = true
-    const readOnly = await send(`/?token=${token}`)
+    const readOnly = await send(`/`)
     expect(readOnly.body).toContain('read-only')
   })
 
   it('shows the uptime and the counters', async () => {
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     expect(body).toContain('1 h 0 min')
     expect(body).toContain('26816')
     expect(body).toContain('3 unread')
@@ -226,7 +225,7 @@ describe('what the overview reports', () => {
   it('carries no control of its own', async () => {
     // Every button lives in the section it acts on, so that a page opened to
     // check something is not the page where something is changed by accident.
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     const main = body.split('<main>')[1] ?? ''
     expect(main).not.toContain('<button type="submit">')
   })
@@ -234,7 +233,7 @@ describe('what the overview reports', () => {
 
 describe('the bridge section', () => {
   it('shows the pinned certificate', async () => {
-    const { body } = await send(`/bridge?token=${token}`)
+    const { body } = await send(`/bridge`)
     expect(body).toContain('AA:BB:CC:DD')
     expect(body).toContain('Proton Mail Bridge')
     expect(body).toContain('2026-07-29')
@@ -242,21 +241,21 @@ describe('the bridge section', () => {
 
   it('says so when nothing is pinned yet', async () => {
     delete snapshot.certificate
-    const { body } = await send(`/bridge?token=${token}`)
+    const { body } = await send(`/bridge`)
     expect(body).toContain('Nothing recorded yet')
   })
 })
 
 describe('activity', () => {
   it('shows what is running and for how long', async () => {
-    const { body } = await send(`/activity?token=${token}`)
+    const { body } = await send(`/activity`)
     expect(body).toContain('search_messages')
     expect(body).toContain('4 s')
     expect(body).toContain('In progress')
   })
 
   it('shows finished calls with their outcome', async () => {
-    const { body } = await send(`/activity?token=${token}`)
+    const { body } = await send(`/activity`)
     expect(body).toContain('list_folders')
     expect(body).toContain('get_message')
     expect(body).toContain('failed')
@@ -265,25 +264,25 @@ describe('activity', () => {
   it('explains that arguments are not recorded', async () => {
     // The promise the record keeps. If this text goes, check that the record
     // still keeps it.
-    const { body } = await send(`/activity?token=${token}`)
+    const { body } = await send(`/activity`)
     expect(body).toContain('deliberately not recorded')
   })
 
   it('is not on any other section', async () => {
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     expect(body).not.toContain('search_messages')
   })
 })
 
 describe('mailbox names', () => {
   it('are not on the overview', async () => {
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     expect(body).not.toContain('Folders/Banking')
     expect(mailboxCalls).toBe(0)
   })
 
   it('appear only on their own page, when asked for', async () => {
-    const { body } = await send(`/mailboxes?token=${token}`)
+    const { body } = await send(`/mailboxes`)
     expect(body).toContain('Folders/Banking')
     expect(body).toContain('Labels/Receipts')
     expect(body).toContain('INBOX')
@@ -291,35 +290,38 @@ describe('mailbox names', () => {
   })
 
   it('leaves out the containers that cannot hold messages', async () => {
-    const { body } = await send(`/mailboxes?token=${token}`)
+    const { body } = await send(`/mailboxes`)
     // "Folders" itself is \Noselect and is only an artefact of the IMAP layout.
     expect(body).not.toMatch(/<code>Folders<\/code>/)
   })
 
-  it('need a token like everything else', async () => {
+  it('are shown to anything on this machine that opens their page', async () => {
+    // Since 2026-11-05 the interface has no token, so reading needs nothing.
+    // Only changes need the PIN. The names stay on their own page, never in
+    // another answer, which is what the next tests hold the server to.
     const { status, body } = await send('/mailboxes')
-    expect(status).toBe(404)
-    expect(body).not.toContain('Folders/Banking')
+    expect(status).toBe(200)
+    expect(body).toContain('Folders/Banking')
   })
 
   it('are not offered when nobody is signed in', async () => {
     snapshot.connected = false
-    const { body } = await send(`/mailboxes?token=${token}`)
+    const { body } = await send(`/mailboxes`)
     expect(body).not.toContain('Folders/Banking')
     expect(mailboxCalls).toBe(0)
   })
 
   it('report a failure instead of an empty list', async () => {
     mailboxFailure = 'the Bridge is not answering'
-    const { body } = await send(`/mailboxes?token=${token}`)
+    const { body } = await send(`/mailboxes`)
     expect(body).toContain('the Bridge is not answering')
   })
 })
 
 describe('changing the Bridge ports', () => {
   it('saves valid ports and says so, on the section they belong to', async () => {
-    const page = await send(`/bridge?token=${token}`)
-    const res = await send(`/settings?token=${token}`, {
+    const page = await send(`/bridge`)
+    const res = await send(`/settings`, {
       csrf: csrfFrom(page.body, '/settings'),
       imapPort: '2143',
       smtpPort: '2025',
@@ -331,9 +333,9 @@ describe('changing the Bridge ports', () => {
   })
 
   it('refuses something that is not a port', async () => {
-    const page = await send(`/bridge?token=${token}`)
+    const page = await send(`/bridge`)
     for (const bad of ['0', '65536', 'abc', '', '1143.5']) {
-      const res = await send(`/settings?token=${token}`, {
+      const res = await send(`/settings`, {
         csrf: csrfFrom(page.body, '/settings'),
         imapPort: bad,
         smtpPort: '1025',
@@ -344,8 +346,8 @@ describe('changing the Bridge ports', () => {
   })
 
   it('needs its own csrf token', async () => {
-    const page = await send(`/credentials?token=${token}`)
-    const res = await send(`/settings?token=${token}`, {
+    const page = await send(`/credentials`)
+    const res = await send(`/settings`, {
       csrf: csrfFrom(page.body, '/sign-out'),
       imapPort: '2143',
       smtpPort: '2025',
@@ -357,8 +359,8 @@ describe('changing the Bridge ports', () => {
   it('offers no form at all when the environment set the ports', async () => {
     await web.stop()
     web = build({ allowPorts: false })
-    token = new URL(await web.start()).searchParams.get('token') ?? ''
-    const { body } = await send(`/bridge?token=${token}`)
+    await web.start()
+    const { body } = await send(`/bridge`)
     // An explicit BRIDGE_IMAP_PORT has to keep meaning what it says.
     expect(body).toContain('come from the environment')
     expect(body).not.toContain('name="imapPort"')
@@ -367,7 +369,7 @@ describe('changing the Bridge ports', () => {
   it('never offers a host field, on any section', async () => {
     // It would be a field that sends the Bridge password to another machine.
     for (const path of ['/', '/bridge', '/credentials', '/activity', '/mailboxes']) {
-      const { body } = await send(`${path}?token=${token}`)
+      const { body } = await send(`${path}`)
       expect(body).not.toContain('name="host"')
       expect(body).not.toContain('name="bridgeHost"')
     }
@@ -376,8 +378,8 @@ describe('changing the Bridge ports', () => {
 
 describe('testing the connection', () => {
   it('reports success as a notice', async () => {
-    const page = await send(`/bridge?token=${token}`)
-    const res = await send(`/test-connection?token=${token}`, {
+    const page = await send(`/bridge`)
+    const res = await send(`/test-connection`, {
       csrf: csrfFrom(page.body, '/test-connection'),
     })
     expect(tests).toBe(1)
@@ -387,8 +389,8 @@ describe('testing the connection', () => {
 
   it('reports a failure as an error', async () => {
     testResult = { ok: false, message: 'Connection refused on 127.0.0.1:1143.' }
-    const page = await send(`/bridge?token=${token}`)
-    const res = await send(`/test-connection?token=${token}`, {
+    const page = await send(`/bridge`)
+    const res = await send(`/test-connection`, {
       csrf: csrfFrom(page.body, '/test-connection'),
     })
     expect(res.body).toContain('Connection refused')
@@ -399,26 +401,26 @@ describe('testing the connection', () => {
 describe('the unofficial notice', () => {
   it('is on every page, signed in or not', async () => {
     snapshot.connected = false
-    const signedOut = await send(`/?token=${token}`)
+    const signedOut = await send(`/`)
     expect(signedOut.body).toContain('not made by, affiliated with or endorsed by Proton AG')
 
     snapshot.connected = true
     for (const path of ['/', '/bridge', '/credentials', '/activity', '/mailboxes']) {
-      const { body } = await send(`${path}?token=${token}`)
+      const { body } = await send(`${path}`)
       expect(body).toContain('not made by, affiliated with or endorsed by Proton AG')
     }
   })
 
   it('can be sent away, and stays away', async () => {
-    const page = await send(`/?token=${token}`)
-    const res = await send(`/dismiss-notice?token=${token}`, {
+    const page = await send(`/`)
+    const res = await send(`/dismiss-notice`, {
       csrf: csrfFrom(page.body, '/dismiss-notice'),
       from: 'overview',
     })
     expect(dismissals).toBe(1)
     expect(res.body).not.toContain('not made by, affiliated with or endorsed by Proton AG')
 
-    const later = await send(`/bridge?token=${token}`)
+    const later = await send(`/bridge`)
     expect(later.body).not.toContain('not made by, affiliated with or endorsed by Proton AG')
   })
 
@@ -426,17 +428,17 @@ describe('the unofficial notice', () => {
     // The notice is a paragraph read once. The mark beside the name is what
     // actually keeps anyone from taking this for Proton's own software.
     noticeDismissed = true
-    const { body } = await send(`/?token=${token}`)
+    const { body } = await send(`/`)
     expect(body).toContain('class="unofficial"')
   })
 
   it('answers on the section it was dismissed from', async () => {
-    const page = await send(`/activity?token=${token}`)
-    const res = await send(`/dismiss-notice?token=${token}`, {
+    const page = await send(`/activity`)
+    const res = await send(`/dismiss-notice`, {
       csrf: csrfFrom(page.body, '/dismiss-notice'),
       from: 'activity',
     })
-    expect(res.body).toContain('href="/activity?token=' + token + '" aria-current="page"')
+    expect(res.body).toContain('href="/activity" aria-current="page"')
   })
 
   it('does not carry a section that does not exist back into the page', async () => {
@@ -447,10 +449,10 @@ describe('the unofficial notice', () => {
     // make this test agree with itself rather than check anything.
     await web.stop()
     web = build({ dismissSticks: false })
-    token = new URL(await web.start()).searchParams.get('token') ?? ''
+    await web.start()
 
-    const page = await send(`/?token=${token}`)
-    const res = await send(`/dismiss-notice?token=${token}`, {
+    const page = await send(`/`)
+    const res = await send(`/dismiss-notice`, {
       csrf: csrfFrom(page.body, '/dismiss-notice'),
       from: '../../etc/passwd',
     })
@@ -460,7 +462,7 @@ describe('the unofficial notice', () => {
   })
 
   it('needs a csrf token like every other write', async () => {
-    const res = await send(`/dismiss-notice?token=${token}`, { csrf: 'wrong', from: 'overview' })
+    const res = await send(`/dismiss-notice`, { csrf: 'wrong', from: 'overview' })
     expect(res.status).toBe(404)
     expect(dismissals).toBe(0)
   })
@@ -470,8 +472,8 @@ describe('the unofficial notice', () => {
     // disappear.
     await web.stop()
     web = build({ allowDismiss: false })
-    token = new URL(await web.start()).searchParams.get('token') ?? ''
-    const { body } = await send(`/?token=${token}`)
+    await web.start()
+    const { body } = await send(`/`)
     expect(body).toContain('not made by, affiliated with or endorsed by Proton AG')
     expect(body).not.toContain('class="dismiss"')
   })

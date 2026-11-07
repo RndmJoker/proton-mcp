@@ -1,0 +1,17 @@
+{
+  "name": "proton-mcp-helper",
+  "description": "Proton MCP Helper: works in the signed-in Proton page for the proton-mcp server, for now on mail filters",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "typecheck": "wxt prepare && tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "wxt": "0.21.5"
+  }
+}

@@ -15,7 +15,7 @@
  * layout.ts.
  */
 
-import { layout, escapeHtml, errorBanner, type DisclaimerState } from './layout.js'
+import { layout, escapeHtml, errorBanner, pinField, type DisclaimerState } from './layout.js'
 import {
   EXPOSURE_LABELS,
   type StoreKind,
@@ -97,8 +97,9 @@ function plainFileWarning(): string {
 }
 
 export interface LoginPageData {
-  token: string
   csrf: string
+  /** True while a PIN is set: then signing in asks for it as well. */
+  pinRequired?: boolean
   /** See sections.ts: required so that it cannot be lost by omission. */
   disclaimer: DisclaimerState
   /** Where the Bridge is expected, prefilled into the advanced block. */
@@ -223,7 +224,6 @@ export function loginPage(data: LoginPageData): string {
   return layout({
     title: 'Sign in',
     section: 'none',
-    token: data.token,
     disclaimer: data.disclaimer,
     body: `<h1>Connect to Proton Mail Bridge</h1>
 <p class="lead">Enter the credentials the Bridge generated for your account. This page runs on your
@@ -231,7 +231,7 @@ own machine and the password is never sent anywhere else.</p>
 
 ${errorBanner(data.error)}
 
-<form method="post" action="/sign-in?token=${escapeHtml(data.token)}" class="sign-in">
+<form method="post" action="/sign-in" class="sign-in">
   <input type="hidden" name="csrf" value="${escapeHtml(data.csrf)}">
   <input type="checkbox" id="warning-seen" class="offscreen">
 
@@ -257,6 +257,7 @@ ${options}
 ${advancedSettings(data)}
 
 <div class="card">
+  ${pinField(data.pinRequired === true)}
   <button type="submit">Connect</button>
   <p class="hint">Nothing is sent until you press this. The Bridge is asked whether the credentials
   work before they are stored anywhere.</p>
@@ -268,8 +269,9 @@ ${plainFileWarning()}
 }
 
 export interface UnlockPageData {
-  token: string
   csrf: string
+  /** True while a PIN is set: then both forms ask for it as well. */
+  pinRequired?: boolean
   disclaimer: DisclaimerState
   /** CSRF token for throwing the file away, bound to that action alone. */
   csrfDiscard: string
@@ -291,7 +293,6 @@ export function unlockPage(data: UnlockPageData): string {
   return layout({
     title: 'Unlock',
     section: 'none',
-    token: data.token,
     disclaimer: data.disclaimer,
     body: `<h1>Unlock the stored credentials</h1>
 <p class="lead">Your Bridge password is saved in an encrypted file. Enter the master password you
@@ -300,12 +301,13 @@ chose for it and the server can connect again.</p>
 ${errorBanner(data.error)}
 
 <div class="card">
-<form method="post" action="/unlock?token=${escapeHtml(data.token)}">
+<form method="post" action="/unlock">
   <input type="hidden" name="csrf" value="${escapeHtml(data.csrf)}">
   <label for="master">Master password</label>
   <input id="master" name="master" type="password" autocomplete="current-password" autofocus>
   <p class="hint">The file is at <code>${escapeHtml(data.path)}</code>. Nothing but this password
   can open it, not even this server.</p>
+  ${pinField(data.pinRequired === true)}
   <button type="submit">Unlock</button>
 </form>
 </div>
@@ -314,8 +316,9 @@ ${errorBanner(data.error)}
 <h2>Forgot the master password?</h2>
 <p>Then the file cannot be opened, by anyone. Throwing it away is the only way forward. You will
 have to look your Bridge password up in the Bridge again and sign in from scratch.</p>
-<form method="post" action="/discard-encrypted?token=${escapeHtml(data.token)}">
+<form method="post" action="/discard-encrypted">
   <input type="hidden" name="csrf" value="${escapeHtml(data.csrfDiscard)}">
+  ${pinField(data.pinRequired === true)}
   <button type="submit" class="danger">Delete the file and start over</button>
 </form>
 </div>`,
@@ -328,8 +331,8 @@ export function rejectionPage(): string {
     title: 'Not available',
     section: 'none',
     body: `<h1>Not available</h1>
-<p>This request was refused. Either the link is wrong or it has expired.</p>
-<p class="hint">The address for this interface is printed by the server when it asks you to sign in,
-and it changes every time the server restarts.</p>`,
+<p>This request was refused.</p>
+<p class="hint">The interface answers only to requests from this machine, addressed to 127.0.0.1 or
+localhost, and only to forms it served itself. Open it again from its own address.</p>`,
   })
 }

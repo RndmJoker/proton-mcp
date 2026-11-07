@@ -48,7 +48,7 @@ all, say so and stop: there is nothing to update, and the setup guide at
 **Usually nothing has to be done here.** The npm that comes with Node.js 24
 asks the registry for a newer version every time `npx` starts a package that
 was given by name only, and `npx -y @rndmjoker/proton-mcp` is exactly that. The
-restart in step 3 is what brings the new version in.
+restart in step 4 is what brings the new version in.
 
 Check what the registry has:
 
@@ -101,11 +101,42 @@ command instead of three.
 
 ---
 
-## 3. Tell them what changed, and that a restart is needed
+## 3. If the browser extension is installed
+
+Filters go through a browser extension, Proton MCP Helper, which the user loaded
+into Chrome by hand. An update of the server touches neither the extension nor
+the copy of its connector. Check whether it was set up:
+
+```bash
+ls ~/.config/proton-mcp/browser/
+```
+
+On Windows the directory is `%USERPROFILE%\.config\proton-mcp\browser\`. If it
+does not exist, skip this step. If it does:
+
+1. Run the setup again, with the command the server is installed with:
+   `npx -y @rndmjoker/proton-mcp@latest setup-browser` for the npm case,
+   `node <that directory>/dist/server.js setup-browser` for a directory, and
+   `proton-mcp setup-browser` for a global install. It keeps the secret and
+   replaces the copy of the connector.
+2. Tell the user to replace the extension themselves, since you cannot load it
+   into their browser: download `proton-mcp-helper-<version>-chrome.zip` from
+   the release of the new version at
+   https://github.com/RndmJoker/proton-mcp/releases, empty the folder Chrome
+   loads the extension from, unpack the zip into it, click the reload arrow on
+   the extension's card in `chrome://extensions`, and reload the Proton tab.
+
+---
+
+## 4. Tell them what changed, and that a restart is needed
 
 **The client has to be restarted before it uses the new version.** A running
 server keeps the old code, and nothing about that is visible from the outside,
 which is the most common way an update appears not to have worked.
+
+**Every session that runs the server needs it, not only this one.** Since 0.5.0
+all of them share one web interface, and a server from before 0.5.0, still
+running in a session started earlier, holds its port until that session ends.
 
 The releases are at https://github.com/RndmJoker/proton-mcp/releases and say
 what changed and why. 0.4.6 and 0.4.8 to 0.4.10 have no release of their own;
@@ -117,9 +148,10 @@ If you cannot tell which version was there before, say so rather than guessing.
 
 ---
 
-## 4. What an update does not touch
+## 5. What an update does not touch
 
-Say this only if it comes up. The point is that nothing has to be set up again.
+Say this only if it comes up. The point is that nothing has to be set up again,
+apart from the browser extension in step 3.
 
 - **Credentials stay where they are**, in the keyring, the encrypted file or
   wherever they were put. An update does not sign anyone out.

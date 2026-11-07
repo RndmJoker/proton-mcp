@@ -17,14 +17,17 @@ import {
   formatDuration,
   errorBanner,
   noticeBanner,
+  pinField,
   type Section,
   type DisclaimerState,
 } from './layout.js'
 import type { StoreKind } from '../credentials/store.js'
+import { UNLOCKABLE, UNLOCKABLE_TEXT } from '../filters/sieve.js'
 
 /** What every section needs to draw itself. */
 interface Common {
-  token: string
+  /** True while a PIN is set: then every form that changes something asks for it. */
+  pinRequired?: boolean
   error?: string
   notice?: string
   /**
@@ -54,10 +57,21 @@ function frame(section: Section, title: string, data: Common, body: string): str
   return layout({
     title,
     section,
-    token: data.token,
     disclaimer: data.disclaimer,
     body: `${errorBanner(data.error)}${noticeBanner(data.notice)}${body}`,
   })
+}
+
+/** One running server, as the overview lists it. Never a password. */
+export interface ServerSummary {
+  pid: number
+  version: string
+  startedAt: number
+  signedIn: boolean
+  address?: string
+  storeTitle?: string
+  /** True for the server that shows this page. */
+  servesInterface: boolean
 }
 
 export interface OverviewData extends Common {
@@ -73,6 +87,48 @@ export interface OverviewData extends Common {
   bridgeHost: string
   bridgeImapPort: number
   bridgeSmtpPort: number
+  /** Every server running on this machine, this one included. */
+  servers?: ServerSummary[]
+  /** Tools whose level differs from the default, with that level in words. */
+  departures?: Array<{ tool: string; level: string }>
+  /** The recipient added to every message sent, when one is. */
+  record?: { address: string; mode: 'cc' | 'bcc' }
+  /** What a filter from an assistant may do beyond filing and flags. */
+  filterActions?: string[]
+}
+
+/**
+ * The running servers, one row each.
+ *
+ * Every client session starts its own server, and all of them share this page.
+ * A sign-in kept only in the memory of the server that shows the page ("this
+ * session only" or an encrypted file still being open) does not reach the
+ * others, and this table is where that becomes visible rather than puzzling.
+ */
+function serverTable(servers: ServerSummary[] | undefined): string {
+  if (!servers || servers.length === 0) return ''
+  const rows = servers
+    .map((server) => {
+      const who = server.signedIn
+        ? `signed in as ${escapeHtml(server.address ?? 'unknown')}` +
+          (server.storeTitle ? `, kept in ${escapeHtml(server.storeTitle)}` : '')
+        : 'not signed in'
+      const mark = server.servesInterface ? ' <span class="state good">shows this page</span>' : ''
+      return (
+        `<tr><td><code>${server.pid}</code>${mark}</td><td>${who}</td>` +
+        `<td>${escapeHtml(server.version)}</td><td>${escapeHtml(formatTime(server.startedAt))}</td></tr>`
+      )
+    })
+    .join('\n')
+  return `<h2>Running servers (${servers.length})</h2>
+<div class="card"><table>
+<tr><th>Process</th><th>Sign-in</th><th>Version</th><th>Started</th></tr>
+${rows}
+</table>
+<p class="hint">Each assistant session starts its own server, and all of them share this page and
+its settings. A password kept in the system keyring or in a file reaches every one of them. One kept
+for this session only, or in an encrypted file opened here, stays with the server that shows this
+page.</p></div>`
 }
 
 /**
@@ -95,6 +151,37 @@ export function overviewSection(data: OverviewData): string {
     row('Bridge IMAP', `${data.bridgeHost}:${data.bridgeImapPort}`),
     row('Bridge SMTP', `${data.bridgeHost}:${data.bridgeSmtpPort}`),
     row('This interface', `127.0.0.1:${data.webPort}`),
+    row(
+      'Changes here',
+      data.pinRequired
+        ? '<span class="state good">need the PIN</span>'
+        : '<span class="state bad">anything on this machine can make them, the assistant included</span>',
+      true,
+    ),
+    row(
+      'Assistant permissions',
+      !data.departures || data.departures.length === 0
+        ? 'as by default: sending and changing filters ask first, deleting and switching filters is off, everything else acts'
+        : data.departures.map((d) => `${d.tool}: ${d.level}`).join(', '),
+    ),
+    row(
+      'Filters may also',
+      data.filterActions && data.filterActions.length > 0
+        ? `<span class="state bad">${escapeHtml(
+            UNLOCKABLE.filter((action) => data.filterActions!.includes(action))
+              .map((action) => UNLOCKABLE_TEXT[action].title.toLowerCase())
+              .join(', '),
+          )}</span>`
+        : 'nothing beyond filing and flags',
+      true,
+    ),
+    row(
+      'Copy of everything sent',
+      data.record
+        ? `<span class="state bad">${escapeHtml(data.record.address)} (${data.record.mode === 'cc' ? 'Cc' : 'Bcc'})</span>`
+        : 'none',
+      true,
+    ),
     row('Server running for', formatDuration(data.uptimeMs)),
   ]
 
@@ -114,7 +201,8 @@ export function overviewSection(data: OverviewData): string {
 interface: it is for configuration and state, not a mail client.</p>
 
 <div class="card"><table>${rows.join('\n')}</table></div>
-${counters.length > 0 ? `<h2>Mailbox counts</h2>\n<div class="card"><table>${counters.join('\n')}</table></div>` : ''}`,
+${counters.length > 0 ? `<h2>Mailbox counts</h2>\n<div class="card"><table>${counters.join('\n')}</table></div>` : ''}
+${serverTable(data.servers)}`,
   )
 }
 
@@ -139,7 +227,7 @@ export function bridgeSection(data: BridgeData): string {
     ? `<p class="hint">The ports come from the environment (<code>BRIDGE_IMAP_PORT</code> or
     <code>BRIDGE_SMTP_PORT</code>), so they are not changed here. An explicit setting stays
     explicit.</p>`
-    : `<form method="post" action="/settings?token=${escapeHtml(data.token)}">
+    : `<form method="post" action="/settings">
   <input type="hidden" name="csrf" value="${escapeHtml(data.csrfSettings)}">
   <label for="imapPort">IMAP port</label>
   <input id="imapPort" name="imapPort" type="text" inputmode="numeric"
@@ -151,6 +239,7 @@ export function bridgeSection(data: BridgeData): string {
   that is not running. You find the real ones in the Bridge under settings. The host is not
   changeable here on purpose: it would be a field that sends your Bridge password to another
   machine.</p>
+  ${pinField(data.pinRequired === true)}
   <button type="submit">Save ports</button>
 </form>`
 
@@ -178,7 +267,7 @@ to. The host stays at <code>${escapeHtml(data.bridgeHost)}</code> and cannot be 
 
 <h2>Connection test</h2>
 <div class="card">
-<form method="post" action="/test-connection?token=${escapeHtml(data.token)}">
+<form method="post" action="/test-connection">
   <input type="hidden" name="csrf" value="${escapeHtml(data.csrfTest)}">
   <p>Checks that the Bridge answers on the ports below and accepts the stored credentials.</p>
   <button type="submit">Test the connection</button>
@@ -217,10 +306,11 @@ ${row('Kept in', data.storeTitle ?? 'nowhere yet')}
 
 <h2>Sign out</h2>
 <div class="card">
-<form method="post" action="/sign-out?token=${escapeHtml(data.token)}">
+<form method="post" action="/sign-out">
   <input type="hidden" name="csrf" value="${escapeHtml(data.csrfSignOut)}">
   <p>Removes the stored credentials from wherever they are kept, everywhere at once, and
-  disconnects.</p>
+  disconnects. Every running server signs out with it.</p>
+  ${pinField(data.pinRequired === true)}
   <button type="submit" class="danger">Sign out and forget credentials</button>
 </form>
 </div>`,
@@ -326,5 +416,311 @@ ${part.map((m) => `<tr><td><code>${escapeHtml(m.path)}</code></td></tr>`).join('
 <p class="lead">Names only, never contents. Proton distinguishes folders, where a message lives in
 exactly one, from labels, where it can carry any number.</p>
 ${sections || '<div class="card"><p class="hint">No mailboxes were returned.</p></div>'}`,
+  )
+}
+
+/** One tool as the permissions page shows it. */
+export interface ToolLevelView {
+  tool: string
+  group: string
+  level: 'off' | 'ask' | 'act'
+  /** The levels this tool offers. Only the sending tools and proposing a filter can ask. */
+  options: Array<'off' | 'ask' | 'act'>
+  /** Set in the environment or by read-only mode, and so not changeable here. */
+  fixed: boolean
+  /** Where the level comes from, in words. */
+  source: string
+  /** True when the level differs from the default. */
+  departs?: boolean
+}
+
+/** The bounds on sending without asking, each with whether the environment fixed it. */
+export interface LimitsView {
+  allowed: string[]
+  maxPerHour?: number
+  until?: string
+  fixed: { allowed: boolean; maxPerHour: boolean; until: boolean }
+}
+
+/** The recipient added to every message sent, as the page shows it. */
+export interface RecordView {
+  address?: string
+  mode?: 'cc' | 'bcc'
+  /** Set in the environment, and so not changeable here. */
+  fixed: boolean
+}
+
+/** What a filter from an assistant may do beyond filing and flags, as the page shows it. */
+export interface FilterActionsView {
+  allowed: string[]
+  /** Set in the environment, and so not changeable here. */
+  fixed: boolean
+}
+
+export interface PermissionsData extends Common {
+  csrfPin: string
+  csrfLevels?: string
+  csrfLimits?: string
+  csrfRecord?: string
+  csrfFilterActions?: string
+  tools?: ToolLevelView[]
+  limits?: LimitsView
+  record?: RecordView
+  filterActions?: FilterActionsView
+}
+
+/**
+ * What a filter may do beyond filing and flags: one switch per action, all off
+ * by default (Tobi, 06.11.2026). The extension has the same switches in its
+ * popup, and an action needs both, so a program that reaches only one of the
+ * two cannot allow it.
+ */
+function filterActionsForm(data: PermissionsData): string {
+  const view = data.filterActions
+  if (!view) return ''
+  const rows = UNLOCKABLE.map((action) => {
+    const on = view.allowed.includes(action)
+    const text = UNLOCKABLE_TEXT[action]
+    const control = view.fixed
+      ? `<strong>${on ? 'allowed' : 'not allowed'}</strong>`
+      : `<input type="checkbox" id="action-${action}" name="action:${action}" value="on"${on ? ' checked' : ''}>`
+    return (
+      `<tr><td>${control}</td><td><label for="action-${action}">${escapeHtml(text.title)}</label></td>` +
+      `<td class="hint">${escapeHtml(text.risk)}</td></tr>`
+    )
+  }).join('\n')
+  const allowed = UNLOCKABLE.filter((action) => view.allowed.includes(action))
+  const noPin = data.pinRequired ? '' : '<br><strong>No PIN is set</strong>, so the assistant could also have switched this on itself.'
+  const cost = allowed.length
+    ? `<div class="error"><strong>An assistant may set up filters that ${escapeHtml(
+        allowed.map((action) => UNLOCKABLE_TEXT[action].title.toLowerCase()).join(', '),
+      )}.</strong> A single message can then ask for such a rule, and it keeps acting long after the
+conversation. With ask first you still see each one in the window of the extension before it is saved.${noPin}</div>`
+    : ''
+  const intro = `<p>A filter an assistant proposes may always file mail into folders and labels and set or clear
+the read and star flags. Anything more is up to you, one action at a time. Not allowed, which is the default,
+the assistant can neither set it up nor change, apply or switch on a filter that does it.</p>`
+  const table = `<table>
+  <tr><th></th><th>Action</th><th>What it costs</th></tr>
+  ${rows}
+  </table>`
+  const after = `<p class="hint">The browser extension has the same switches in its popup, and an action needs
+  both. Forwarding is not among them: Proton does not run it in filters, and its own forwarding setting is out
+  of reach of these tools. Proton's check of a script and its spam guard stay in place whatever is allowed.</p>`
+  if (view.fixed) {
+    return `<h2>What a filter may do</h2>
+<div class="card">${cost}${intro}${table}
+<p class="hint">Set in the environment (<code>PROTON_MCP_FILTER_ACTIONS</code>), so it is not changed here.</p>${after}</div>`
+  }
+  return `<h2>What a filter may do</h2>
+<div class="card">
+${cost}
+${intro}
+<form method="post" action="/permissions/filter-actions">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfFilterActions ?? '')}">
+  ${table}
+  ${after}
+  ${pinField(data.pinRequired === true)}
+  <button type="submit">Save what filters may do</button>
+</form>
+</div>`
+}
+
+/** The copy of everything sent: who gets it, and the form to change it. */
+function recordForm(data: PermissionsData): string {
+  const record = data.record
+  if (!record) return ''
+  const now = record.address
+    ? `<p>Every message sent through this server also goes to <code>${escapeHtml(record.address)}</code>
+as ${record.mode === 'cc' ? 'Cc, visible to every recipient' : 'Bcc, invisible to the other recipients'}.</p>`
+    : '<p>No copy is added.</p>'
+  if (record.fixed) {
+    return `<h2>A copy of everything sent</h2>
+<div class="card">${now}<p class="hint">Set in the environment (<code>PROTON_MCP_COPY_TO</code>), so it is
+not changed here.</p></div>`
+  }
+  return `<h2>A copy of everything sent</h2>
+<div class="card">
+${now}
+<form method="post" action="/permissions/record">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfRecord ?? '')}">
+  <label for="copyTo">Address</label>
+  <input id="copyTo" name="address" type="text" autocomplete="off" spellcheck="false"
+         value="${escapeHtml(record.address ?? '')}" placeholder="archive@example.com">
+  <label for="copyAs">As</label>
+  <select id="copyAs" name="mode">
+    <option value="bcc"${record.mode !== 'cc' ? ' selected' : ''}>Bcc: a record the recipients do not see</option>
+    <option value="cc"${record.mode === 'cc' ? ' selected' : ''}>Cc: visible to every recipient</option>
+  </select>
+  <p class="hint">Added to every message every sending tool sends, before the question is asked, so it is
+  part of what you confirm, and the question names it as coming from this setting. Nothing the
+  assistant passes removes it. Leave the address empty to add nothing.</p>
+  ${pinField(data.pinRequired === true)}
+  <button type="submit">Save the copy</button>
+</form>
+</div>`
+}
+
+const LEVEL_NAMES: Record<'off' | 'ask' | 'act', string> = {
+  off: 'off',
+  ask: 'ask first',
+  act: 'act on its own',
+}
+
+/** The table of tools with a choice for each, or the fixed value where the environment decided. */
+function levelTable(data: PermissionsData): string {
+  if (!data.tools || data.tools.length === 0) return ''
+  const rows = data.tools
+    .map((tool) => {
+      const choice = tool.fixed
+        ? `<strong>${escapeHtml(LEVEL_NAMES[tool.level])}</strong> <span class="hint">(${escapeHtml(tool.source)})</span>`
+        : `<select name="level:${escapeHtml(tool.tool)}" aria-label="${escapeHtml(tool.tool)}">` +
+          tool.options
+            .map(
+              (option) =>
+                `<option value="${option}"${option === tool.level ? ' selected' : ''}>${escapeHtml(LEVEL_NAMES[option])}</option>`,
+            )
+            .join('') +
+          '</select>'
+      return `<tr><td><code>${escapeHtml(tool.tool)}</code></td><td>${escapeHtml(tool.group)}</td><td>${choice}</td></tr>`
+    })
+    .join('\n')
+
+  const autonomous = data.tools.filter(
+    (tool) => tool.level === 'act' && tool.options.includes('ask'),
+  )
+  const sending = autonomous.filter((tool) => tool.group !== 'filters')
+  const filters = autonomous.filter((tool) => tool.group === 'filters')
+  const names = (tools: ToolLevelView[]): string =>
+    `${tools.map((t) => escapeHtml(t.tool)).join(', ')} ${tools.length === 1 ? 'acts' : 'act'} without asking.`
+  const noPin = data.pinRequired ? '' : '<br><strong>No PIN is set</strong>, so the assistant could also have switched this on itself.'
+  const cost =
+    (sending.length
+      ? `<div class="error"><strong>${names(sending)}</strong> Your private mail, text written by
+strangers and a way out are then together with no person in between: a single message can ask for
+your mailbox to be forwarded, and nobody would see it happen. Bound it below where you can.${noPin}</div>`
+      : '') +
+    (filters.length
+      ? `<div class="error"><strong>${names(filters)}</strong> A single message can then ask for a rule
+that files mail away from you or marks it as read, and the rule keeps acting long after the conversation.
+Applying one changes the mail that is already there, all of it at once. What a filter may do beyond filing
+and flags is set below, and the extension asks for the same in its popup, where it also lists every
+change.${noPin}</div>`
+      : '')
+
+  return `<h2>What the assistant may do</h2>
+<div class="card">
+${cost}
+<form method="post" action="/permissions/levels">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfLevels ?? '')}">
+  <table>
+  <tr><th>Tool</th><th>Group</th><th>Level</th></tr>
+  ${rows}
+  </table>
+  <p class="hint"><strong>off</strong> takes a tool away from the assistant entirely.
+  <strong>ask first</strong> makes it ask you before acting: the sending tools through your client, the
+  filter tools in a window of the browser extension. Both do this by default. <strong>act on its own</strong> lets it go ahead. A level set in the server's
+  environment wins over this page and is shown here as fixed.</p>
+  ${pinField(data.pinRequired === true)}
+  <button type="submit">Save the levels</button>
+</form>
+</div>`
+}
+
+/** The optional bounds on sending without asking. */
+function limitsForm(data: PermissionsData): string {
+  const limits = data.limits
+  if (!limits) return ''
+  const fixedNote = (fixed: boolean) => (fixed ? ' <span class="hint">(set in the environment)</span>' : '')
+  const allowed = limits.fixed.allowed
+    ? `<p><code>${escapeHtml(limits.allowed.join(', ') || 'anyone')}</code>${fixedNote(true)}</p>`
+    : `<textarea id="allowed" name="allowed" rows="4">${escapeHtml(limits.allowed.join('\n'))}</textarea>`
+  const max = limits.fixed.maxPerHour
+    ? `<p><code>${escapeHtml(String(limits.maxPerHour ?? 'no limit'))}</code>${fixedNote(true)}</p>`
+    : `<input id="maxPerHour" name="maxPerHour" type="text" inputmode="numeric" value="${escapeHtml(limits.maxPerHour === undefined ? '' : String(limits.maxPerHour))}">`
+  const until = limits.fixed.until
+    ? `<p><code>${escapeHtml(limits.until ?? 'none')}</code>${fixedNote(true)}</p>`
+    : `<input id="until" name="until" type="date" value="${escapeHtml(limits.until ?? '')}">`
+
+  return `<h2>Bounds on sending without asking</h2>
+<div class="card">
+<form method="post" action="/permissions/limits">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfLimits ?? '')}">
+  <label for="allowed">Permitted recipients</label>
+  ${allowed}
+  <p class="hint">One per line: a full address, or a domain written as <code>@example.com</code>. Empty
+  means anyone. A message to anyone else asks first instead.</p>
+  <label for="maxPerHour">At most this many per hour</label>
+  ${max}
+  <p class="hint">Counted per running server. Beyond it, sending asks first again. Empty means no limit.</p>
+  <label for="until">Until this day</label>
+  ${until}
+  <p class="hint">After this day, sending asks first again until you set a new one. Empty means no end.</p>
+  <p class="hint">Every bound is optional. A send outside one asks you instead of failing.</p>
+  ${pinField(data.pinRequired === true)}
+  <button type="submit">Save the bounds</button>
+</form>
+</div>`
+}
+
+/**
+ * What the assistant may do, and who may change that.
+ *
+ * The PIN comes first on this page because everything else on it depends on
+ * it. Without one, the settings here are only as safe as every program on this
+ * machine, the assistant included: it can open this address with a browser
+ * tool as easily as the user can. The page says so plainly instead of leaving
+ * it to be discovered.
+ */
+export function permissionsSection(data: PermissionsData): string {
+  const pin = data.pinRequired
+    ? `<p>A PIN is set. Every change in this interface asks for it.</p>
+<form method="post" action="/pin">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfPin)}">
+  <input type="hidden" name="action" value="change">
+  ${pinField(true)}
+  <label for="next">New PIN</label>
+  <input id="next" name="next" type="password" autocomplete="new-password">
+  <label for="nextRepeat">New PIN again</label>
+  <input id="nextRepeat" name="nextRepeat" type="password" autocomplete="new-password">
+  <button type="submit">Change the PIN</button>
+</form>
+<form method="post" action="/pin">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfPin)}">
+  <input type="hidden" name="action" value="remove">
+  ${pinField(true)}
+  <button type="submit" class="danger">Remove the PIN</button>
+</form>`
+    : `<div class="error">No PIN is set. Anything running on this machine can change the settings
+here, and so can an assistant with a browser tool, which may then allow itself more than you meant
+to.</div>
+<form method="post" action="/pin">
+  <input type="hidden" name="csrf" value="${escapeHtml(data.csrfPin)}">
+  <input type="hidden" name="action" value="set">
+  <label for="next">PIN</label>
+  <input id="next" name="next" type="password" autocomplete="new-password">
+  <label for="nextRepeat">PIN again</label>
+  <input id="nextRepeat" name="nextRepeat" type="password" autocomplete="new-password">
+  <p class="hint">At least 6 characters. It is stored only as a salted hash and never shown to the
+  assistant. Type it only into a tab you are using yourself: a tab an assistant is driving at that
+  moment can read what is typed into it. A forgotten PIN is removed by deleting the line
+  <code>"pin"</code> from the settings file.</p>
+  <button type="submit">Set the PIN</button>
+</form>`
+
+  return frame(
+    'permissions',
+    'Permissions',
+    data,
+    `<h1>Permissions</h1>
+<p class="lead">What an assistant may do through this server, and who may change that. Settings
+made here apply to every running server at once.</p>
+
+<h2>PIN</h2>
+<div class="card">${pin}</div>
+${levelTable(data)}
+${filterActionsForm(data)}
+${limitsForm(data)}
+${recordForm(data)}`,
   )
 }

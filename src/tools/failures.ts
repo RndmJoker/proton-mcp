@@ -53,10 +53,26 @@ export function setLockedCheck(check: () => Promise<boolean>): void {
   lockedCheck = check
 }
 
+/**
+ * Whether the server that shows the page is signed in with a password that
+ * stays with it, while this one is not.
+ *
+ * Asked before the locked check, because it overrules it: while that server
+ * shows the page, the page offers neither the sign-in form nor the unlock
+ * form, so the remedy the other two answers name is out of reach.
+ */
+let elsewhereCheck: (() => boolean) | undefined
+
+export function setElsewhereCheck(check: () => boolean): void {
+  elsewhereCheck = check
+}
+
 /** For tests, which must not inherit a hint from another test. */
 export function _clearSignInHint(): void {
   signInHint = undefined
   lockedCheck = undefined
+  elsewhereCheck = undefined
+  previewBase = undefined
 }
 
 /** The sign-in address, when the interface is running. */
@@ -65,30 +81,37 @@ export function signInUrl(): string | undefined {
 }
 
 /**
- * Where a message waiting for confirmation can be read.
+ * Where this server shows the messages waiting for confirmation.
  *
- * Built from the same address as the sign-in hint, which already carries the
- * access token: the interface refuses anything without it, so a link that
- * dropped the token would lead to a refusal page rather than to the message.
- *
- * Returns nothing when no interface is running. The confirmation then says so
- * rather than offering a link that goes nowhere, because a question asked with
- * less behind it than usual should say as much.
+ * Its own source rather than the sign-in address. Since 2026-11-05 every
+ * running server shares one interface, but a waiting message is held only in
+ * the memory of the server that asked, so that server shows it on a port of
+ * its own.
  */
-export function previewUrl(digest: string): string | undefined {
-  const base = signInHint?.()
-  if (!base) return undefined
-  try {
-    const url = new URL(base)
-    url.pathname = `/pending/${digest}`
-    return url.toString()
-  } catch {
-    return undefined
-  }
+let previewBase: ((digest: string) => string | undefined) | undefined
+
+export function setPreviewBase(base: (digest: string) => string | undefined): void {
+  previewBase = base
 }
 
-/** Which of the two situations the caller is in. */
+/**
+ * Where a message waiting for confirmation can be read.
+ *
+ * Returns nothing when this server cannot show previews. The confirmation then
+ * says so rather than offering a link that goes nowhere, because a question
+ * asked with less behind it than usual should say as much.
+ */
+export function previewUrl(digest: string): string | undefined {
+  return previewBase?.(digest)
+}
+
+/** Which of the three situations the caller is in. */
 export async function missingCredentials(): Promise<MissingCredentials> {
+  try {
+    if (elsewhereCheck?.() === true) return 'elsewhere'
+  } catch {
+    // A list of servers that cannot be read leaves the other two answers.
+  }
   try {
     return (await lockedCheck?.()) === true ? 'locked' : 'not-signed-in'
   } catch {

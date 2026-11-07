@@ -301,3 +301,42 @@ describe('Session with an encrypted file', () => {
     await expect(session.signIn(creds, 'encrypted-file')).rejects.toThrow(/master password/i)
   })
 })
+
+describe('rereading after a sign-in or sign-out in another server', () => {
+  it('reads a shared store again, and so follows a sign-out made elsewhere', async () => {
+    const keyring = fake('keyring', creds)
+    const session = new Session({ notify: quiet, stores: harmlessStores({ keyring }) })
+    expect(await session.credentials()).toEqual(creds)
+
+    // Another server signed out through the interface and emptied the store.
+    await keyring.clear()
+    session.reloadShared()
+    expect(session.signedIn).toBe(false)
+    expect(await session.credentials()).toBeUndefined()
+  })
+
+  it('reads a shared store again, and so follows a sign-in made elsewhere', async () => {
+    const keyring = fake('keyring')
+    const session = new Session({ notify: quiet, stores: harmlessStores({ keyring }) })
+    expect(await session.credentials()).toBeUndefined()
+
+    await keyring.save(creds)
+    session.reloadShared()
+    expect(await session.credentials()).toEqual(creds)
+  })
+
+  it('keeps credentials from the environment, which nothing in the interface overrules', async () => {
+    const session = new Session({ notify: quiet, fromEnvironment: creds, stores: harmlessStores() })
+    session.reloadShared()
+    expect(session.signedIn).toBe(true)
+    expect(await session.credentials()).toEqual(creds)
+  })
+
+  it('keeps credentials held only in this process', async () => {
+    const session = new Session({ notify: quiet, stores: harmlessStores() })
+    await session.signIn(creds, 'session')
+    session.reloadShared()
+    expect(session.signedIn).toBe(true)
+    expect(session.storeKind).toBe('session')
+  })
+})

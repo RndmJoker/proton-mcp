@@ -23,3 +23,12 @@ paths = [
   '''\.env\.example''',
   '''package-lock\.json''',
 ]
+
+# The public key in extension/wxt.config.ts fixes the id of the browser
+# extension, the only one the connector lets in. It is public by design:
+# Chrome puts it into the manifest of every copy. gitleaks reads it as a
+# generic API key. Allowed by its exact value, so any other value in that file,
+# down to a single changed character, is still caught.
+regexes = [
+  '''^MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqnHPw9/scOh99eUli3fI/nWI\+nS/lDGWSiLZkTbM0D0VeT8V/jsh6HkkGS\+N9pUlP29RJiNuB2/HqLH7Vq4CY6IZXr5mgVeFIJ5bbkMNO/ba7YVK\+n3pvCYsT2BWX1XFJV5WlgnCRVknWUW2ss9poeTmywcgd4bwpRzTAle9auI8wX/614wKJQKi4RxAa8c/6IeV3XIuGKuRjR4yNyz8B7TkXXbAj1pKhGMeJQxW58JG4OIuZOHDawuajf\+BI2dEWHPLCfnBaVXwi0NGSSvA\+EaIZ/Xk9fKVGdyv75vmNrJ6tkykjwcIVlcziKXiratcH7nqDdQk8WJR2s4EC6hWdQIDAQAB$''',
+]

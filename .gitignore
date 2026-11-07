@@ -47,3 +47,7 @@ known-certificate.json
 /AGENTS.md
 /CLAUDE.md
 /scripts/ci/
+
+# The browser extension (#59): build output and the types WXT generates
+extension/.output/
+extension/.wxt/

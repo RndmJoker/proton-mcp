@@ -45,7 +45,7 @@ function previewFor(message: Draft, tool = 'send_message'): string {
   holdForPreview(digest, message, tool)
   const view = pendingView(digest)
   if (!view) throw new Error('the message was not held')
-  return pendingPage({ ...view, token: 'test-token', disclaimer: 'plain' })
+  return pendingPage({ ...view, disclaimer: 'plain' })
 }
 
 describe('a formatted message is delivered as formatting', () => {
@@ -182,7 +182,6 @@ describe('the preview shows what the body does not', () => {
     if (!view) throw new Error('the message was not held')
     const shown = pendingPage({
       ...view,
-      token: 'test-token',
       disclaimer: { csrf: 'c', from: 'overview' },
     })
 
