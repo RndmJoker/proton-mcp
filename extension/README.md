@@ -4,6 +4,10 @@ The browser extension of [proton-mcp](../README.md). It works in the signed-in P
 
 It is not part of the npm package. Each release carries it as a zip.
 
+## Installing
+
+For now by hand only, it is not in the Chrome Web Store. Every [release of proton-mcp](https://github.com/RndmJoker/proton-mcp/releases) carries it as `proton-mcp-helper-<version>-chrome.zip`, built from that release's tagged commit. How to set up the connector, load the zip in Chrome and update it later is in the server's readme, section [The browser extension for filters](../README.md#the-browser-extension-for-filters). Building it yourself, below, is the other way.
+
 ## Building
 
 ```bash

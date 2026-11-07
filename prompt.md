@@ -157,6 +157,29 @@ Tell the user, in plain words:
 
 ---
 
+## Filters, only if the user wants them
+
+Proton keeps filters out of the Bridge. This server reaches them through a
+browser extension, Proton MCP Helper, which works in the user's signed-in Proton
+tab in Chrome. It is optional, and for now it is installed by hand: it is not in
+the Chrome Web Store.
+
+If the user wants it, run:
+
+```bash
+npx -y @rndmjoker/proton-mcp@latest setup-browser
+```
+
+Then hand them the rest, which only they can do in Chrome: download
+`proton-mcp-helper-<version>-chrome.zip` from the latest release at
+https://github.com/RndmJoker/proton-mcp/releases, unpack it into a folder that
+can stay where it is, open `chrome://extensions`, switch on Developer mode,
+choose **Load unpacked**, pick that folder, and reload the Proton tab. The
+readme's section on the browser extension has the details, including how to
+update it.
+
+---
+
 ## Later, to update
 
 The server can answer that itself: `check_for_updates` asks npm and reports what

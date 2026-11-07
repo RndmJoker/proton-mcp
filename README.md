@@ -109,6 +109,8 @@ These limits come from the Bridge itself and cannot be worked around:
 
 ## Installing
 
+Filters additionally need the browser extension, which for now is installed by hand, see [The browser extension for filters](#the-browser-extension-for-filters).
+
 ### Hand it to your assistant
 
 If you already have an AI assistant with a shell, the shortest route is to let it do the work:
@@ -127,7 +129,7 @@ Or hand over the guide, the same way as for the installation:
 Fetch https://raw.githubusercontent.com/RndmJoker/proton-mcp/main/update.md and follow it
 ```
 
-It works out how you installed it, since the three ways look identical from the outside and are updated differently, and it reminds you that the client has to be restarted. Nothing has to be set up again: credentials, the pinned certificate and the ports all survive.
+It works out how you installed it, since the three ways look identical from the outside and are updated differently, and it reminds you that the client has to be restarted. Nothing has to be set up again: credentials, the pinned certificate and the ports all survive. The browser extension, where you installed it, is the exception and is replaced by hand, see [Updating it](#the-browser-extension-for-filters).
 
 ### From npm
 
@@ -277,6 +279,8 @@ You should see your system mailboxes. If instead you get a message saying the Br
 
 Optional. Proton keeps filters behind an interface it has not opened to other programs, and the Bridge does not carry them. The extension **Proton MCP Helper** does the work inside the Proton page you are signed in to in Chrome, and a small connector program, which Chrome starts for it, carries the requests between this server and the extension. This server never holds a Proton session or password for it.
 
+**For now it is installed by hand.** It is not in the Chrome Web Store. Every [release](https://github.com/RndmJoker/proton-mcp/releases) carries it as `proton-mcp-helper-<version>-chrome.zip`. Take the one of the release that matches your server, which for `npx -y @rndmjoker/proton-mcp@latest` is the latest.
+
 1. Set up the connector, once per computer:
 
    ```bash
@@ -284,10 +288,21 @@ Optional. Proton keeps filters behind an interface it has not opened to other pr
    ```
 
    It writes a secret only you can read, a copy of the connector and a launcher under `~/.config/proton-mcp/browser/`, and the file that tells Chrome which program the extension may start. It prints what it wrote. Run it again after Node moved, for example to another version under another path.
-2. Load the extension: unpack the zip attached to the release, open `chrome://extensions`, switch on Developer mode, choose **Load unpacked** and pick the unpacked folder. Its id has to be `nfmconelbflppeoolebhcckbmffiokkd`.
-3. Reload any open Proton tab once, or open `https://mail.proton.me` and sign in.
+2. Download the zip from the release and unpack it into a folder of its own, somewhere it can stay. Chrome loads the extension from that folder every time it starts, so moving or deleting the folder removes the extension.
+3. Open `chrome://extensions`, switch on Developer mode, choose **Load unpacked** and pick that folder. Its card has to show the id `nfmconelbflppeoolebhcckbmffiokkd`, the only one the connector lets in.
+4. Reload any open Proton tab once, or open `https://mail.proton.me` and sign in.
 
 The extension's popup says whether the connector runs and what waits; when it does not run, it says why. It also holds the extension's own switches for saving, applying, moving, deleting and switching filters without its window, and what a filter may do beyond filing and flags, all off by default, see [Filters, through the browser extension](#filters-through-the-browser-extension). When the extension cannot be reached, the filter tools say so as well, with the cause where it can be told: no setup, Chrome not running, the extension missing or switched off. To take the connector away again, run the same command with `--remove`, and remove the extension in `chrome://extensions`.
+
+**Updating it.** Chrome never updates an extension loaded by hand, and the connector stays the copy `setup-browser` made. So after the server was updated:
+
+1. Run `setup-browser` again, as above. The secret stays, the copy of the connector is replaced.
+2. Download the zip of the new release, empty the folder Chrome loads the extension from, and unpack the zip into it.
+3. In `chrome://extensions`, click the reload arrow on the extension's card, then reload the Proton tab.
+
+When the connector no longer fits the server, the filter tools say so, with these steps.
+
+**The code.** The source of the extension is in [`extension/`](extension/) in this repository, and its [readme](extension/README.md) says how to build it yourself. The zip attached to a release is built from that release's tagged commit, and GitHub attaches the source of the whole repository to every release as well.
 
 Chrome first. Measured on Linux; the setup for macOS and Windows is written but not measured yet. One Chrome profile at a time can serve the server.
 
