@@ -383,6 +383,7 @@ describe('a sign-in that stays with the server showing the page', () => {
     expect(answer).toContain('sign out and sign in again')
     expect(answer).toContain('end the session whose server shows the page')
     expect(answer).toContain(url)
+    expect(answer).toContain('its list of running servers shows which one is signed in')
     expect(answer).toContain('Do not ask for the password in this conversation')
     // The errand that goes round in a circle.
     expect(answer).not.toContain('enter the Proton address together with the Bridge password')
